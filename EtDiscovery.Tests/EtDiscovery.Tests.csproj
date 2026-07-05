@@ -18,10 +18,15 @@
 
   <ItemGroup>
     <ProjectReference Include="../EtDiscovery.Core/EtDiscovery.Core.csproj" />
+    <ProjectReference Include="../EtDiscovery.Web/EtDiscovery.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="NUnit.Framework" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
 </Project>

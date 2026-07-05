@@ -1,337 +1,211 @@
-# 最小验证原型方案
+# 最小 Web 原型验证
 
-本文档用于约束第一轮可行性探索，只回答三个问题：
+本文档记录 `etdiscovery` 首轮最小 Web 原型的实现范围、当前验证结论和已确认的注意事项。
 
-- `etdiscovery` 是否能先以纯 C# 方案快速跑通最小原型
-- Web 管理服务托管 `easytier-core` 独立进程的模式是否足够简单可控
-- 节点处理和服务选择逻辑在抽象成独立库后，能否脱离真实网络环境做稳定测试
+## 1. 目标
 
-首轮验证不是最终架构定案，也不追求直接覆盖核心设计文档中的全部能力。
+首轮目标不是最终架构定稿，而是先验证以下问题：
 
-## 1. 本轮目标
+- 能否在 `etdiscovery/` 下用纯 C# 快速搭建最小可运行原型
+- 能否由 Web 服务托管 `easytier-core`，并通过 `easytier-cli` 读取真实组网状态
+- 能否将 discovery 核心逻辑下沉到独立类库，并保持单元测试不依赖真实网络
+- 能否完成 `registry + worker` 两节点的最小真实链路验证
 
-验证目标：
+## 2. 当前项目结构
 
-- 在 `etdiscovery/` 下创建一个独立的 C# 解决方案
-- 实现一个最小 Web 管理服务，负责托管 `easytier-core` 进程
-- 让同一个 Web 项目可通过启动参数声明主角色和附加角色
-- 将 A 侧节点处理和服务选择逻辑拆到独立类库
-- 通过测试项目使用模拟数据直接验证算法逻辑
-- 后续可将 Web 项目构建后分别部署到两台设备，验证组网和最小服务注册行为
+当前以仓库现状为准：
 
-不纳入本轮：
-
-- Rust 控制面实现
-- C ABI / FFI 封装
-- 多 A 同步
-- 正式注册、注销协议
-- 怀疑票、多因子评分、NAT/relay/链路质量综合调度
-- 完整鉴权、ACL 和持久化
-- 移动端打包和复杂框架集成
-
-## 2. 为什么首轮全部使用 C#
-
-当前约束很明确：
-
-- 还没有进入二进制封装阶段
-- 当前更重要的是便于排查问题，而不是验证语言边界
-- 原型需要同时覆盖 Web 服务、进程托管、HTTP API 和算法测试
-
-因此首轮选择纯 C# 的原因是：
-
-- 便于快速迭代和调试
-- Web 服务、进程管理和单元测试都能在同一技术栈内完成
-- 后续如果要引入 Rust 或 FFI，可以把当前原型作为对照基线
-
-当前结论：
-
-- 第一轮原型不引入 Rust
-- 第一轮原型不做 FFI
-- 第一轮重点是先跑通最小闭环和验证项目拆分是否合理
-
-## 3. 解决方案与项目结构
-
-建议在 `etdiscovery/` 下建立独立解决方案，首轮先包含三个项目：
-
-- `EtDiscovery.sln`
-- `EtDiscovery.Web`
-  - 原型 A/B 角色 Web 项目
-  - 承担 EasyTier 进程托管、最小 Web API、测试角色行为
-- `EtDiscovery.Core`
-  - A 侧算法逻辑类库
-  - 承担节点处理、服务可见性判断、服务选择
-- `EtDiscovery.Tests`
-  - 测试项目
-  - 引用 `EtDiscovery.Core`
-  - 使用模拟数据直接验证节点处理逻辑和服务选择
-
-建议目录：
-
-- `etdiscovery/src/EtDiscovery.Web/`
-- `etdiscovery/src/EtDiscovery.Core/`
-- `etdiscovery/tests/EtDiscovery.Tests/`
+- `etdiscovery/EtDiscovery.Web/`
+- `etdiscovery/EtDiscovery.Core/`
+- `etdiscovery/EtDiscovery.Tests/`
 - `etdiscovery/docs/`
 
-结构约束：
+其中：
 
-- `EtDiscovery.Web` 依赖 `EtDiscovery.Core`
-- `EtDiscovery.Tests` 只依赖 `EtDiscovery.Core`
-- 算法逻辑不要直接耦合 EasyTier 真实进程或 HTTP 层
-- Web 层负责把 EasyTier 连接状态和实例列表映射成算法库可消费的数据模型
-- 运行时权限不要直接使用多个布尔开关，而应收敛为三组互斥能力清单
+- `EtDiscovery.Web`
+  - 托管 `easytier-core`
+  - 调用 `easytier-cli`
+  - 提供最小 Web API
+- `EtDiscovery.Core`
+  - 承载 discovery 相关模型和策略
+- `EtDiscovery.Tests`
+  - 以纯模拟数据验证核心逻辑和部分 Web 侧纯逻辑
 
-这样做的目的：
+## 3. 已落地能力
 
-- 先把“可部署原型”和“可测试逻辑”拆开
-- 降低后续替换 EasyTier 接入方式或算法实现的成本
-- 避免测试依赖真实网络、真实节点和真实进程生命周期
+### 3.1 启动与配置
 
-## 4. Web 原型项目职责
+- `--roles` 为唯一必须显式通过命令行提供的参数
+- 其他参数统一从配置文件读取
+- 角色统一使用：
+  - `registry`
+  - `worker`
+  - `client`
 
-`EtDiscovery.Web` 首轮是一个无认证的最小管理服务应用。
+### 3.2 EasyTier 进程托管
 
-核心职责：
+- 使用 `ProcessStartInfo.ArgumentList` 逐项构造参数
+- 自动分配本地 RPC 地址并传给 `--rpc-portal`
+- 应用退出时自动回收子进程
+- 已增加最近 `stdout/stderr` 缓存和退出摘要日志
 
-- 接收 `easytier-core` 二进制路径
-- 根据配置和启动参数启动 `easytier-core`
-- 在应用退出时关闭对应的 EasyTier 进程
-- 暴露最小 HTTP + JSON Web API
-- 在 `A` 角色下承载最小节点处理与服务选择逻辑
-- 在 `B` 角色下连入网络并暴露一个测试 API
+### 3.3 HTTP 接口
 
-### 4.1 启动参数
+当前接口全部去掉 `/api` 前缀：
 
-建议至少支持以下参数：
+- `GET /health`
+- `GET /easytier/peers`
+- `GET /test/ping`
+- `GET /discovery/services`
+- `GET /discovery/select`
 
-- `--role`
-  - 主角色，首轮仍以 `A` 或 `B` 为主
-- `--additional-roles`
-  - 可选，声明附加角色列表，例如让 `A` 同时承担 `B`
-- `--easytier-core-path`
-  - EasyTier 可执行文件路径
-- `--network-name`
-  - 虚拟网络名称
-- `--network-secret`
-  - 虚拟网络密钥
-- `--ipv4-cidr`
-  - 使用的虚拟网段
-- `--listen-url`
-  - Web 项目监听地址
-- `--peer`
-  - 可选，加入现有网络所需的对端地址
-- `--service-name`
-  - 仅 `B` 角色使用的测试服务名
-- `--service-port`
-  - 仅 `B` 角色使用的测试服务端口
+### 3.4 registry 侧能力
 
-### 4.2 EasyTier 进程托管
+- 通过 `easytier-cli` 读取 peer 列表
+- 按 `network-name` 和 `virtual-network-cidr` 过滤 discovery 候选
+- 使用配置中的固定服务名与端口，生成远端 worker 对应的 `ServiceInstance`
 
-Web 项目负责把 EasyTier 作为子进程托管。
+### 3.5 worker 侧能力
 
-最小行为：
+- 可加入现有 EasyTier 网络
+- 可暴露最小 `/test/ping`
+- 可选择：
+  - 显式配置静态 `Ipv4`
+  - 在未配置 `Ipv4` 时追加 `--dhcp`
 
-- 应用启动时根据配置构造 EasyTier 启动参数
-- 启动独立 `easytier-core` 进程
-- 记录进程 ID、启动参数和运行状态
-- 应用停止时优先尝试正常结束子进程
-- 若正常结束失败，再做有限度的强制终止
+## 4. 当前验证结论
 
-首轮只验证“能启动、能加入网络、能在退出时关闭”，不追求复杂守护和自恢复。
+### 4.1 已初步验证可用
 
-### 4.3 网络创建与加入
+- 最小 Web 应用可以正常运行
+- `registry` 与 `worker` 的核心逻辑链路已经打通
+- `registry` 可以读取 EasyTier peer 状态并生成 discovery 视图
+- 增强日志和 `/health` 输出后，排查体验已明显改善
 
-本轮采用最简单约定：
+### 4.2 已确认的 EasyTier 行为
 
-- 应用通过配置指定虚拟网段、网络名称和密钥
-- 以这些参数启动 `easytier-core`
-- 若角色为 `A`，则创建或承载该网络，并承担最小目录侧逻辑
-- 若角色为 `B`，则通过参数指定的对端加入已有网络
+- `EtDiscovery:Ipv4` 为空时，EasyTier 不会直接创建本机 TUN 虚拟地址
+- `worker + --dhcp` 的含义是：
+  - 由 worker 自己启用 EasyTier 的自动地址选择逻辑
+  - 不是“registry 显式充当 DHCP 服务器并主动分配地址”
+- `registry` 不应因为“单点启动”而自动附加 `--dhcp`
+  - 否则 registry 自己的 IP 可能漂移
 
-这里的“注册成功”定义也做最小化：
+### 4.3 DHCP 现阶段结论
 
-- `B` 角色连入网络成功
-- `A` 能观察到该节点或该实例
-- 即视为服务已注册
+- 官方 desktop 客户端在 Windows 上开启 DHCP 后，能够拿到 `10.1.1.2`
+- Web 原型中仅给 worker 追加 `--dhcp` 后，逻辑方向已与 EasyTier 源码一致
+- 但 DHCP 是否最终成功，还取决于节点是否有权限完成虚拟网卡创建与 IP 落地
 
-本验证阶段不提供显式注册和注销机制。
+## 5. 权限与平台注意事项
 
-## 5. A/B 角色行为
+## 5.1 Windows
 
-### 5.1 A 角色
+- 只要节点需要本机虚拟 IP，就应视为需要管理员权限
+- 当前已确认需要管理员权限的典型场景：
+  - `registry`
+  - `worker` 使用静态 `Ipv4`
+  - `worker` 使用 `--dhcp`
+- 若权限不足，典型现象包括：
+  - `Failed to create adapter`
+  - 本机 `virtualIp` 一直为空
+  - DHCP 超时
 
-`A` 角色同时承担两类职责：
+### 5.1.1 Windows 清单嵌入
 
-- 作为管理服务加入或创建 EasyTier 网络
-- 作为最小目录与选择器持有服务视图
+项目已新增 `EtDiscovery.Web/app.manifest` 并在 Windows 构建时嵌入：
 
-最小行为：
+- `requestedExecutionLevel = requireAdministrator`
+- `UseAppHost = true`
 
-- 启动 EasyTier 并连入指定网络
-- 周期性读取 EasyTier 的连接实例列表
-- 将连接实例转换成 `EtDiscovery.Core` 可处理的节点与服务视图
-- 对外暴露“连接实例列表”和“服务选择结果”能力
+注意：
 
-本轮的简化约定：
+- 只有运行生成出的 `EtDiscovery.Web.exe` 才会触发 UAC 提权
+- 如果使用 `dotnet EtDiscovery.Web.dll` 启动，不会自动提权
 
-- `A` 节点允许附带 `B` 角色，以便同机验证“目录管理 + 服务发布”
-- 但实际权限仍需收敛到三组互斥能力中，而不是把 A/B 职责简单拼接
-- 并额外暴露一个测试 API，便于从其他节点直接验证互通与发现
+### 5.1.2 Windows 推荐启动方式
 
-### 5.2 B 角色
+- 优先运行发布或构建输出的 `EtDiscovery.Web.exe`
+- 使用管理员权限启动
 
-`B` 角色本轮是最小服务提供方。
+## 5.2 Linux
 
-最小行为：
+根据 EasyTier 源码当前可确认的最小前提：
 
-- 启动 EasyTier 并加入指定网络
-- 暴露一个测试 API
-- 通过固定配置声明自己的测试服务名和端口
-- 不主动执行显式注册/注销请求
+- 如果需要本机虚拟 IP，则必须保证 TUN 可用
+- 通常需要 `root` 或等效权限
+- 需要确保 `/dev/net/tun` 可访问
+- 必要时执行：
+  - `modprobe tun`
+- 某些可选能力需要 `CAP_NET_ADMIN`
+  - 例如部分 socket mark 相关功能
+  - 这与最基本的 TUN 前提不是同一层要求
 
-只要它连上网络并能被 `A` 观察到，就视为已注册。
+## 6. 当前实现约束
 
-## 6. Web API 范围
+### 6.1 网络筛选
 
-首轮只暴露最小 HTTP + JSON API，不做任何认证。
+- `/discovery/*` 只基于以下候选构建：
+  - `sameNetwork = true`
+  - 虚拟 IP 位于 `virtual-network-cidr` 内
 
-公共接口：
+### 6.2 服务元数据
 
-- `GET /api/easytier/peers`
-  - 直接返回 EasyTier 当前连接实例列表
+- 首版未实现 worker 自注册
+- `registry` 侧仍使用固定配置生成 worker 服务实例
 
-建议保留的辅助接口：
+### 6.3 状态观测
 
-- `GET /api/health`
-  - 返回 Web 进程和 EasyTier 子进程基础状态
-- `GET /api/test/ping`
-  - `A` 和 `B` 都可暴露，便于验证服务互通
+- `/easytier/peers` 会明确返回：
+  - `networkName`
+  - `virtualIp`
+  - `sameNetwork`
+  - `inVirtualNetworkCidr`
+  - `eligibleForDiscovery`
+- `/health` 当前会额外返回：
+  - `configuredVirtualIp`
+  - `dhcpEnabled`
+  - `requiresTunDevice`
+  - `requiresWindowsElevationForEasyTier`
+  - `processElevated`
+  - `privilegeChecklist`
+  - `easyTier.recentStdout`
+  - `easyTier.recentStderr`
 
-仅 `A` 角色建议增加：
+## 7. 推荐验证路径
 
-- `GET /api/discovery/services`
-  - 返回当前算法视角下的服务视图
-- `GET /api/discovery/select?serviceName=...`
-  - 返回一次最小服务选择结果
+### 7.1 Windows
 
-说明：
+推荐流程：
 
-- 真正必须实现的只有公共接口 `GET /api/easytier/peers`
-- 其余接口是为了降低手工验证成本，建议一并保留
+1. `registry` 使用显式固定 `Ipv4`
+2. 运行 `EtDiscovery.Web.exe`
+3. 使用管理员权限启动
+4. `worker` 先尝试未配置 `Ipv4` 且启用 `--dhcp`
+5. 若现场环境下 DHCP 不稳定，再改为显式静态 `Ipv4`
 
-## 7. A 侧算法库拆分
+### 7.2 Linux
 
-`EtDiscovery.Core` 作为独立类库，首轮只承载最小算法逻辑。
+推荐流程：
 
-建议内容：
+1. 先检查 `/dev/net/tun`
+2. 确认 `tun` 模块已加载
+3. 再启动 Web 原型
 
-- 节点模型
-- 服务实例模型
-- 节点可见性处理
-- 服务列表生成
-- 服务选择策略
+## 8. 当前后续建议
 
-建议最小抽象：
+- 在原型继续演进前，优先保持“可排查性”
+- Windows 与 Linux 的启动方式、权限要求和排查步骤应同步写入用户文档
+- 若后续需要继续依赖 DHCP 行为，建议增加：
+  - 更明确的 DHCP 成功/失败状态日志
+  - 更细粒度的 `blockingReason`
+  - Windows 与 Linux 的启动示例
 
-- `INodeSnapshotProvider`
-  - 输入原始节点/实例快照
-- `INodeProcessingPolicy`
-  - 根据节点状态生成可见服务列表
-- `IServiceSelectionPolicy`
-  - 根据候选服务实例执行选择
-- `DiscoveryRuntime`
-  - 负责持有本地角色集合、能力清单和后台刷新入口
+## 9. 当前阶段结论
 
-### 7.1 角色与能力约束
+首轮最小 Web 原型已经具备继续推进的基础，原因是：
 
-首轮代码实现中，角色和能力应遵守以下规则：
-
-- 一个节点允许同时持有多个角色
-- 但最终权限必须收敛到三组互斥能力：
-  - 目录管理能力
-  - 服务发布能力
-  - 服务消费能力
-- 例如同时具备 `A + B` 角色的节点，可同时拥有“管理目录”和“发布本节点服务”的能力
-- 但不应出现“作为 registry 再注册一遍服务、作为 worker 再注册一遍服务”这种双重职责模型
-
-首轮默认实现：
-
-- 节点可见性判断
-  - 只根据节点是否可达决定实例是否可见
-- 服务选择
-  - 在可见实例中做稳定轮询
-
-刻意不引入：
-
-- 评分器接口
-- 健康探测器
-- 多观察者投票
-- 任意脚本扩展
-
-## 8. 测试项目范围
-
-`EtDiscovery.Tests` 只验证算法库，不直接依赖真实 EasyTier 环境。
-
-### 8.1 必测单元测试
-
-- 节点从可达变不可达后，实例从服务列表移除
-- 节点恢复可达后，实例重新进入服务列表
-- 单服务单实例时，选择结果稳定返回唯一实例
-- 单服务多实例时，选择结果按轮询顺序返回
-- 某实例被移除后，轮询游标不会再命中失效实例
-- 服务列表为空时，返回明确空结果而不是异常
-
-### 8.2 可以追加的轻量集成测试
-
-如果后面希望在 C# 内做少量集成验证，可考虑：
-
-- 模拟 EasyTier 原始 peer 列表，验证到领域模型的转换
-- 模拟 `A` 多次刷新连接实例列表，验证服务视图更新
-- 模拟 `B` 上下线，验证选择结果变更
-
-但这部分依然不要求启动真实 EasyTier 进程。
-
-## 9. 真实环境验证范围
-
-代码构建完成后，计划由你将 `EtDiscovery.Web` 分别部署到两台设备上验证。
-
-验证场景：
-
-- 一台设备具备公网 IP
-- 另一台设备通过 EasyTier 接入
-- 验证两台设备是否能正常组网
-- 验证 `A` 是否能观察到 `B`
-- 验证基于连网即注册的最小服务发现是否成立
-- 验证测试 API 是否可被发现和访问
-
-本阶段结论重点是：
-
-- EasyTier 进程托管是否稳定
-- A/B 原型运行方式是否顺手
-- 连网即注册这条最小路径是否足够支撑后续细化
-
-## 10. 验证完成标准
-
-满足以下条件即可认为首轮方案可继续推进：
-
-- `etdiscovery/` 下的 C# 解决方案结构清晰可维护
-- `EtDiscovery.Web` 能正常托管和关闭 `easytier-core`
-- `A` 和 `B` 能通过配置完成最小组网
-- `GET /api/easytier/peers` 能正确返回连接实例列表
-- `EtDiscovery.Core` 能在纯模拟数据下稳定通过测试
-- `A` 可以基于节点可达性和轮询策略给出最小服务选择结果
-
-若以下问题出现，则需要重新评估：
-
-- EasyTier 子进程托管复杂度明显高于预期
-- 仅靠连接实例列表不足以支撑最小服务视图
-- 算法库为了测试仍不得不依赖真实网络或进程状态
-- `A` / `B` 同项目双角色的工程复杂度过高
-
-## 11. 建议执行顺序
-
-1. 先创建 `etdiscovery` 下的解决方案和三个项目
-2. 实现 `EtDiscovery.Web` 的配置读取和 EasyTier 进程托管
-3. 实现公共接口 `GET /api/easytier/peers`
-4. 将 A 侧节点处理与轮询选择下沉到 `EtDiscovery.Core`
-5. 用 `EtDiscovery.Tests` 补齐模拟数据测试
-6. 最后再做双机部署验证
+- Web 托管 EasyTier 已可用
+- discovery 核心逻辑已从真实网络依赖中拆分出来
+- Windows 权限问题、DHCP 行为和启动方式的关键偏差已被明确识别
+- 当前剩余问题更多是“环境与运行方式约束”，而不是原型整体方向错误

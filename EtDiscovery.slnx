@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="EtDiscovery.Core/EtDiscovery.Core.csproj" />
   <Project Path="EtDiscovery.Tests/EtDiscovery.Tests.csproj" />
+  <Project Path="EtDiscovery.Web/EtDiscovery.Web.csproj" />
 
 </Solution>
