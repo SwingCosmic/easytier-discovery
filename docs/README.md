@@ -8,8 +8,9 @@
 - [02. 待讨论分歧点](./service-registry-open-questions.md)
 - [03. 应用层与集成设计](./service-registry-application-layer.md)
 - [04. 参考资料与对比](./service-registry-references.md)
-- [05. 实施方案与阶段计划](./service-registry-plan.md)
-- [06. EasyTier 仓库研究资料](../../easytier-research.md)
+- [05. 最小验证原型方案](./service-registry-prototype-validation.md)
+- [06. 实施方案与阶段计划](./service-registry-plan.md)
+- [07. EasyTier 仓库研究资料](../../easytier-research.md)
 
 ## 项目背景
 
@@ -35,6 +36,8 @@
 - 配置与 ACL 采用“拓扑所有权 + owner 确认链 + 多 A 最终一致同步”模型。
 - 存活判断采用“租约 TTL + 应用健康 + EasyTier 路由信号 + 多观察者怀疑投票 + 调用反馈”的组合机制。
 - SDK 只做实例选择，不封装业务 RPC。
+- 单个节点允许同时承担多个角色，但最终权限必须收敛到“目录管理 / 服务发布 / 服务消费”三组互斥能力清单中，避免职责漂移。
+- 在复杂算法落地前，先通过 `etdiscovery/` 下的 C# 原型解决方案验证“进程托管、连网即注册、节点处理、服务选择、最小 Web API”闭环。
 
 ## 下一步细化建议
 
