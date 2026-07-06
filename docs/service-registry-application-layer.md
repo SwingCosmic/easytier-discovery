@@ -18,17 +18,25 @@
 
 ## 2. SDK API 草案
 
+本节中，已经进入当前原型的能力会额外标注“已落地”；仅保留接口占位的会标注“占位”。
+
 ### 2.1 注册 API
 
 - `register_service(definition, instance, health_check)`
+  - 已落地为 `POST /discovery/instances`
 - `renew(instance_id, lease_epoch)`
+  - 当前仅保留接口方向，对应 `PUT /discovery/instances/{instanceId}/lease` 占位
 - `deregister(instance_id)`
+  - 已落地为 `DELETE /discovery/instances/{instanceId}`
 - `set_draining(instance_id)`
+  - 当前仅保留接口方向，将由 `status` 类接口承载
 
 ### 2.2 发现 API
 
 - `resolve(service_query) -> ordered instances`
+  - 已落地为 `GET /discovery/services?serviceName=...`
 - `selectOneHealthyInstance(service_query, call_context) -> selected instance`
+  - 已落地为 `GET /discovery/select`
 - `selectManyHealthyInstances(service_query, call_context, limit) -> ordered selected instances`
 - `watch(service_query) -> instance change stream`
 - `get_node_profile(node_id)`
@@ -45,6 +53,11 @@
 - `selectOneHealthyInstance` 是首版最重要的应用层能力。
 - `watch` 需要支持本地缓存回放和断线重连。
 - `call_context` 需要包含调用方角色、区域、网络偏好、协议要求与超时预算。
+- 当前原型已经把“注册、发现、选择”打通；“续租、watch、反馈、主动状态控制”仍待后续补齐。
+- 当前原型的数据读取语义不是强一致读，而是“读取共享内存数据源的瞬时快照”：
+  - 注册表和节点观测允许并发更新
+  - 查询接口读取当前时刻可见视图
+  - 连续两次查询可能得到不同结果，这被视为正常行为
 
 ## 3. SelectedInstance 返回模型建议
 
@@ -104,6 +117,20 @@
 - 新增一个轻量适配层，把业务注册和查询逐步切到 etdiscovery
 - 先替换“发现与选择”，后替换“注册与健康上报”
 
+当前原型对应关系：
+
+- 服务发布配置已切换为 `Services[]`
+- worker 实例注册通过 HTTP 直接完成
+- registry 当前维护内存实例注册表
+- worker 定位 registry 的方式为：
+  - 优先 `RegistryPeer`
+  - 否则回退到首个远端可发现 peer 的 `VirtualIp`
+- `/discovery/services` 与 `/discovery/select` 已可作为最小发现入口
+- 运维和管理端状态控制接口目前仍为占位
+- 读取接口的行为约定是：
+  - 读取 registry 当前内存数据源的瞬时视图
+  - 接受节点状态、实例状态存在少量滞后和短暂不一致
+
 ## 5. 典型框架集成方向
 
 ### 5.1 gRPC
@@ -143,6 +170,17 @@
 
 - gRPC：主接口
 - HTTP/JSON：调试和运维友好接口
+
+当前原型现状：
+
+- 目前只实现了 HTTP/JSON 形态
+- 尚未引入 gRPC sidecar 协议
+- 对业务迁移最有用的最小 HTTP 接口目前包括：
+  - `POST /discovery/instances`
+  - `DELETE /discovery/instances/{instanceId}`
+  - `GET /discovery/instances/{instanceId}`
+  - `GET /discovery/services`
+  - `GET /discovery/select`
 
 ## 7. 移动端打包与应用边界
 

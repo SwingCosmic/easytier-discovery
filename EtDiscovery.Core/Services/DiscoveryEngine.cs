@@ -1,5 +1,6 @@
 using EtDiscovery.Core.Abstractions;
 using EtDiscovery.Core.Models;
+using System.Threading;
 
 namespace EtDiscovery.Core.Services;
 
@@ -10,7 +11,6 @@ public sealed class DiscoveryEngine
 {
     private readonly INodeProcessingPolicy _catalogBuilder;
     private readonly IServiceSelectionPolicy _selectionPolicy;
-    private readonly object _sync = new();
     private ServiceCatalog _catalog = new(new Dictionary<ServiceKey, IReadOnlyList<ServiceInstance>>());
 
     public DiscoveryEngine(
@@ -26,10 +26,7 @@ public sealed class DiscoveryEngine
     /// </summary>
     public void ApplySnapshot(DiscoverySnapshot snapshot)
     {
-        lock (_sync)
-        {
-            _catalog = _catalogBuilder.BuildCatalog(snapshot);
-        }
+        Volatile.Write(ref _catalog, _catalogBuilder.BuildCatalog(snapshot));
     }
 
     /// <summary>
@@ -37,10 +34,12 @@ public sealed class DiscoveryEngine
     /// </summary>
     public IReadOnlyList<ServiceInstance> Resolve(ServiceQuery query)
     {
-        lock (_sync)
-        {
-            return _catalog.GetInstances(query);
-        }
+        return Volatile.Read(ref _catalog).GetInstances(query);
+    }
+
+    public IReadOnlyList<ServiceInstance> GetAllInstances()
+    {
+        return Volatile.Read(ref _catalog).GetAllInstances();
     }
 
     /// <summary>
@@ -48,12 +47,9 @@ public sealed class DiscoveryEngine
     /// </summary>
     public SelectedInstance? SelectOne(ServiceQuery query)
     {
-        lock (_sync)
-        {
-            var candidates = _catalog.GetInstances(query);
-            var selected = _selectionPolicy.Select(query.ToServiceKey(), candidates);
-            return selected is null ? null : ToSelectedInstance(selected);
-        }
+        var candidates = Volatile.Read(ref _catalog).GetInstances(query);
+        var selected = _selectionPolicy.Select(query.ToServiceKey(), candidates);
+        return selected is null ? null : ToSelectedInstance(selected);
     }
 
     /// <summary>
@@ -61,13 +57,10 @@ public sealed class DiscoveryEngine
     /// </summary>
     public IReadOnlyList<SelectedInstance> SelectMany(ServiceQuery query, int limit)
     {
-        lock (_sync)
-        {
-            return _catalog.GetInstances(query)
-                .Take(limit)
-                .Select(ToSelectedInstance)
-                .ToArray();
-        }
+        return Volatile.Read(ref _catalog).GetInstances(query)
+            .Take(limit)
+            .Select(ToSelectedInstance)
+            .ToArray();
     }
 
     /// <summary>
@@ -75,10 +68,7 @@ public sealed class DiscoveryEngine
     /// </summary>
     public NodeProfile? GetNodeProfile(string nodeId)
     {
-        lock (_sync)
-        {
-            return _catalog.GetNodeProfile(nodeId);
-        }
+        return Volatile.Read(ref _catalog).GetNodeProfile(nodeId);
     }
 
     /// <summary>
@@ -86,31 +76,29 @@ public sealed class DiscoveryEngine
     /// </summary>
     public CallModeRecommendation? RecommendCallMode(string instanceId)
     {
-        lock (_sync)
+        var catalog = Volatile.Read(ref _catalog);
+        var instance = catalog.ServiceKeys
+            .SelectMany(key => catalog.GetInstances(key))
+            .FirstOrDefault(item => item.InstanceId == instanceId);
+
+        if (instance is null)
         {
-            var instance = _catalog.ServiceKeys
-                .SelectMany(key => _catalog.GetInstances(key))
-                .FirstOrDefault(item => item.InstanceId == instanceId);
-
-            if (instance is null)
-            {
-                return null;
-            }
-
-            var endpoint = instance.Endpoints.FirstOrDefault() ?? new EndpointDescriptor(instance.Address, instance.Port)
-            {
-                Protocol = instance.Protocol,
-                CallMode = CallMode.Direct,
-                IsRecommended = true,
-            };
-
-            return new CallModeRecommendation(instanceId)
-            {
-                RecommendedCallMode = endpoint.CallMode,
-                RecommendedEndpoint = endpoint,
-                Reason = "placeholder",
-            };
+            return null;
         }
+
+        var endpoint = instance.Endpoints.FirstOrDefault() ?? new EndpointDescriptor(instance.Address, instance.Port)
+        {
+            Protocol = instance.Protocol,
+            CallMode = CallMode.Direct,
+            IsRecommended = true,
+        };
+
+        return new CallModeRecommendation(instanceId)
+        {
+            RecommendedCallMode = endpoint.CallMode,
+            RecommendedEndpoint = endpoint,
+            Reason = "placeholder",
+        };
     }
 
     private SelectedInstance ToSelectedInstance(ServiceInstance instance)

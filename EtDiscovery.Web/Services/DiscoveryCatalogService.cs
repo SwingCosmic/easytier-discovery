@@ -1,6 +1,7 @@
 using EtDiscovery.Core.Models;
 using EtDiscovery.Core.Services;
 using EtDiscovery.Web.Models;
+using System.Threading;
 
 namespace EtDiscovery.Web.Services;
 
@@ -9,9 +10,7 @@ public sealed class DiscoveryCatalogService
     private readonly EtDiscoveryWebOptions _options;
     private readonly DiscoveryEngine _engine;
     private readonly DiscoveryNodeContext _context;
-    private readonly object _sync = new();
-    private DateTimeOffset? _lastRefreshAt;
-    private DiscoverySnapshot _lastSnapshot = DiscoverySnapshot.Empty;
+    private CatalogSnapshotState _state = CatalogSnapshotState.Empty;
 
     public DiscoveryCatalogService(
         EtDiscoveryWebOptions options,
@@ -25,18 +24,12 @@ public sealed class DiscoveryCatalogService
 
     public DateTimeOffset? GetLastRefreshAt()
     {
-        lock (_sync)
-        {
-            return _lastRefreshAt;
-        }
+        return Volatile.Read(ref _state).LastRefreshAt;
     }
 
     public DiscoverySnapshot GetLastSnapshot()
     {
-        lock (_sync)
-        {
-            return _lastSnapshot;
-        }
+        return Volatile.Read(ref _state).Snapshot;
     }
 
     public void ApplySnapshot(DiscoverySnapshot snapshot)
@@ -47,18 +40,19 @@ public sealed class DiscoveryCatalogService
         }
 
         _engine.ApplySnapshot(snapshot);
-        lock (_sync)
-        {
-            _lastSnapshot = snapshot;
-            _lastRefreshAt = DateTimeOffset.UtcNow;
-        }
+        Volatile.Write(ref _state, new CatalogSnapshotState(snapshot, DateTimeOffset.UtcNow));
     }
 
     public IReadOnlyList<ServiceInstance> ResolveServices(string? serviceName = null)
     {
         EnsureRegistry();
 
-        var query = new ServiceQuery("default", serviceName ?? _options.RegistryWorkerServiceName!, "http");
+        if (string.IsNullOrWhiteSpace(serviceName))
+        {
+            return _engine.GetAllInstances();
+        }
+
+        var query = new ServiceQuery("default", serviceName, "http");
         return _engine.Resolve(query);
     }
 
@@ -74,5 +68,10 @@ public sealed class DiscoveryCatalogService
         {
             throw new InvalidOperationException("Discovery APIs require the registry role.");
         }
+    }
+
+    private sealed record CatalogSnapshotState(DiscoverySnapshot Snapshot, DateTimeOffset? LastRefreshAt)
+    {
+        public static CatalogSnapshotState Empty { get; } = new(DiscoverySnapshot.Empty, null);
     }
 }

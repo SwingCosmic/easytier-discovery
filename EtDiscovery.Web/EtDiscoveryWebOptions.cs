@@ -27,13 +27,9 @@ public sealed class EtDiscoveryWebOptions
 
     public required IReadOnlyList<string> Peers { get; init; }
 
-    public string? WorkerServiceName { get; init; }
+    public required IReadOnlyList<PublishedServiceOptions> Services { get; init; }
 
-    public int? WorkerServicePort { get; init; }
-
-    public string? RegistryWorkerServiceName { get; init; }
-
-    public int? RegistryWorkerServicePort { get; init; }
+    public string? RegistryPeer { get; init; }
 
     public TimeSpan RefreshInterval { get; init; } = TimeSpan.FromSeconds(5);
 
@@ -62,6 +58,10 @@ public sealed class EtDiscoveryWebOptions
 
     public bool RequiresTunDevice =>
         HasConfiguredVirtualIp || ShouldEnableDhcp;
+
+    public bool HasPublishedServices => Services.Count > 0;
+
+    public int ListenPort => new Uri(ListenUrl, UriKind.Absolute).Port;
 
     public IReadOnlyList<string> GetPrivilegeChecklist()
     {
@@ -104,24 +104,28 @@ public sealed class EtDiscoveryWebOptions
         return items;
     }
 
-    public ServiceKey GetRegistryServiceKey()
+    public Uri GetRegistryBaseUri(string? registryAddress = null)
     {
-        if (RegistryWorkerServiceName is null)
+        if (IsRegistry)
         {
-            throw new InvalidOperationException("Registry worker service name is not configured.");
+            return new Uri(ListenUrl, UriKind.Absolute);
         }
 
-        return new ServiceKey("default", RegistryWorkerServiceName, "http");
-    }
+        var configuredPeer = !string.IsNullOrWhiteSpace(RegistryPeer)
+            ? RegistryPeer
+            : registryAddress;
 
-    public ServiceKey GetWorkerServiceKey()
-    {
-        if (WorkerServiceName is null)
+        if (string.IsNullOrWhiteSpace(configuredPeer))
         {
-            throw new InvalidOperationException("Worker service name is not configured.");
+            throw new InvalidOperationException("Registry endpoint is not configured.");
         }
 
-        return new ServiceKey("default", WorkerServiceName, "http");
+        if (Uri.TryCreate(configuredPeer, UriKind.Absolute, out var absoluteUri))
+        {
+            return absoluteUri;
+        }
+
+        return new Uri($"http://{configuredPeer}:{ListenPort}", UriKind.Absolute);
     }
 
     public static string? NormalizeIpv4(string? value)
@@ -166,6 +170,63 @@ public sealed class EtDiscoveryWebOptions
 
     [DllImport("libc")]
     private static extern uint geteuid();
+}
+
+public sealed class PublishedServiceOptions
+{
+    public required string ServiceName { get; init; }
+
+    public required int Port { get; init; }
+
+    public string Protocol { get; init; } = "http";
+
+    public string? InstanceId { get; init; }
+
+    public string? Version { get; init; }
+
+    public string? Group { get; init; }
+
+    public IReadOnlyDictionary<string, string> Tags { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    public IReadOnlyDictionary<string, string> Metadata { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    public int Weight { get; init; } = 1;
+
+    public string ResolveInstanceId(string nodeId)
+    {
+        if (!string.IsNullOrWhiteSpace(InstanceId))
+        {
+            return InstanceId;
+        }
+
+        return $"{nodeId}:{ServiceName}:{Protocol}:{Port}";
+    }
+
+    public ServiceDefinition CreateDefinition()
+    {
+        return new ServiceDefinition("default", ServiceName, Protocol)
+        {
+            Version = Version,
+            Group = Group,
+            Tags = MergeTags(),
+        };
+    }
+
+    public IReadOnlyDictionary<string, string> MergeTags()
+    {
+        var tags = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var entry in Tags)
+        {
+            tags[entry.Key] = entry.Value;
+        }
+
+        foreach (var entry in Metadata)
+        {
+            tags[entry.Key] = entry.Value;
+        }
+
+        return tags;
+    }
 }
 
 public enum RoleName

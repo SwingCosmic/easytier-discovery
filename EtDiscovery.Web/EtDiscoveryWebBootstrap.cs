@@ -79,13 +79,9 @@ public sealed class EtDiscoveryConfiguration
 
     public List<string> Peers { get; set; } = [];
 
-    public string? WorkerServiceName { get; set; }
+    public string? RegistryPeer { get; set; }
 
-    public int? WorkerServicePort { get; set; }
-
-    public string? RegistryWorkerServiceName { get; set; }
-
-    public int? RegistryWorkerServicePort { get; set; }
+    public List<PublishedServiceConfiguration> Services { get; set; } = [];
 
     public int? RefreshIntervalSeconds { get; set; }
 
@@ -109,15 +105,31 @@ public sealed class EtDiscoveryConfiguration
             Peers = Peers
                 .Where(static peer => !string.IsNullOrWhiteSpace(peer))
                 .ToArray(),
-            WorkerServiceName = NullIfWhiteSpace(WorkerServiceName),
-            WorkerServicePort = WorkerServicePort,
-            RegistryWorkerServiceName = NullIfWhiteSpace(RegistryWorkerServiceName),
-            RegistryWorkerServicePort = RegistryWorkerServicePort,
+            RegistryPeer = NormalizeRegistryPeer(NullIfWhiteSpace(RegistryPeer)),
+            Services = Services.Select(MapService).ToArray(),
             RefreshInterval = TimeSpan.FromSeconds(RefreshIntervalSeconds.GetValueOrDefault(5)),
         };
 
         Validate(options);
         return options;
+    }
+
+    private static PublishedServiceOptions MapService(PublishedServiceConfiguration service)
+    {
+        return new PublishedServiceOptions
+        {
+            ServiceName = Require(NullIfWhiteSpace(service.ServiceName), "EtDiscovery:Services:ServiceName"),
+            Port = service.Port ?? throw new ArgumentException("EtDiscovery:Services:Port is required."),
+            Protocol = NullIfWhiteSpace(service.Protocol) ?? "http",
+            InstanceId = NullIfWhiteSpace(service.InstanceId),
+            Version = NullIfWhiteSpace(service.Version),
+            Group = NullIfWhiteSpace(service.Group),
+            Tags = service.Tags?.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal)
+                ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            Metadata = service.Metadata?.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal)
+                ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            Weight = service.Weight.GetValueOrDefault(1),
+        };
     }
 
     private static void Validate(EtDiscoveryWebOptions options)
@@ -134,14 +146,16 @@ public sealed class EtDiscoveryConfiguration
 
         if (options.IsWorker)
         {
-            if (string.IsNullOrWhiteSpace(options.WorkerServiceName))
+            if (!options.HasPublishedServices)
             {
-                throw new ArgumentException("EtDiscovery:WorkerServiceName is required when roles include worker.");
+                throw new ArgumentException("EtDiscovery:Services must contain at least one entry when roles include worker.");
             }
 
-            if (options.WorkerServicePort is null)
+            if (!options.IsRegistry &&
+                !options.HasPeers &&
+                string.IsNullOrWhiteSpace(options.RegistryPeer))
             {
-                throw new ArgumentException("EtDiscovery:WorkerServicePort is required when roles include worker.");
+                throw new ArgumentException("Worker requires EtDiscovery:RegistryPeer or at least one EtDiscovery:Peers entry when registry role is absent.");
             }
 
             if (options.RequiresPeerProvidedVirtualIp && !options.HasPeers)
@@ -150,27 +164,25 @@ public sealed class EtDiscoveryConfiguration
             }
         }
 
-        if (options.IsRegistry)
+        if (options.IsRegistry &&
+            options.RequiresPeerProvidedVirtualIp &&
+            !options.HasPeers)
         {
-            if (string.IsNullOrWhiteSpace(options.RegistryWorkerServiceName))
-            {
-                throw new ArgumentException("EtDiscovery:RegistryWorkerServiceName is required when roles include registry.");
-            }
-
-            if (options.RegistryWorkerServicePort is null)
-            {
-                throw new ArgumentException("EtDiscovery:RegistryWorkerServicePort is required when roles include registry.");
-            }
-
-            if (options.RequiresPeerProvidedVirtualIp && !options.HasPeers)
-            {
-                throw new ArgumentException("Registry requires EtDiscovery:Ipv4 when no EtDiscovery:Peers are configured.");
-            }
+            throw new ArgumentException("Registry requires EtDiscovery:Ipv4 when no EtDiscovery:Peers are configured.");
         }
 
         if (options.HasConfiguredVirtualIp && !options.VirtualNetworkCidr.Contains(options.ConfiguredVirtualIp))
         {
             throw new ArgumentException("EtDiscovery:Ipv4 must belong to EtDiscovery:VirtualNetworkCidr.");
+        }
+
+        var duplicateInstanceId = options.Services
+            .GroupBy(service => service.InstanceId, StringComparer.Ordinal)
+            .FirstOrDefault(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
+
+        if (duplicateInstanceId is not null)
+        {
+            throw new ArgumentException($"EtDiscovery:Services contains duplicate InstanceId '{duplicateInstanceId.Key}'.");
         }
     }
 
@@ -217,4 +229,37 @@ public sealed class EtDiscoveryConfiguration
         var fileName = Path.GetFileName(normalized);
         return string.IsNullOrWhiteSpace(fileName) ? null : normalized;
     }
+
+    private static string? NormalizeRegistryPeer(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return Uri.TryCreate(value, UriKind.Absolute, out _)
+            ? value
+            : EtDiscoveryWebOptions.NormalizeIpv4(value);
+    }
+}
+
+public sealed class PublishedServiceConfiguration
+{
+    public string? ServiceName { get; set; }
+
+    public int? Port { get; set; }
+
+    public string? Protocol { get; set; }
+
+    public string? InstanceId { get; set; }
+
+    public string? Version { get; set; }
+
+    public string? Group { get; set; }
+
+    public Dictionary<string, string>? Tags { get; set; }
+
+    public Dictionary<string, string>? Metadata { get; set; }
+
+    public int? Weight { get; set; }
 }

@@ -15,15 +15,19 @@ builder.Services.AddSingleton(new DiscoveryNodeContext(
 builder.Services.AddSingleton(sp => new DiscoveryEngine(
     new ReachableNodeProcessingPolicy(),
     new RoundRobinServiceSelectionPolicy()));
+builder.Services.AddSingleton<DiscoveryInstanceRegistry>();
 builder.Services.AddSingleton<EtDiscoveryProcessManager>();
 builder.Services.AddSingleton<EasyTierCliClient>();
 builder.Services.AddSingleton<PeerObservationMapper>();
 builder.Services.AddSingleton<EasyTierObservationService>();
 builder.Services.AddSingleton<RegistrySnapshotBuilder>();
 builder.Services.AddSingleton<DiscoveryCatalogService>();
+builder.Services.AddSingleton<WorkerRegistrationOrchestrator>();
+builder.Services.AddHttpClient(nameof(WorkerRegistrationOrchestrator));
 builder.Services.AddHostedService(sp => sp.GetRequiredService<EtDiscoveryProcessManager>());
 builder.Services.AddHostedService<EasyTierVirtualIpMonitor>();
 builder.Services.AddHostedService<DiscoveryRefreshBackgroundService>();
+builder.Services.AddHostedService<WorkerRegistrationBackgroundService>();
 
 var app = builder.Build();
 app.MapEtDiscoveryEndpoints();

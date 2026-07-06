@@ -39,6 +39,15 @@ public sealed class ServiceCatalog
             .ToArray();
     }
 
+    public IReadOnlyList<ServiceInstance> GetAllInstances()
+    {
+        return _services.Values
+            .SelectMany(instances => instances)
+            .OrderBy(instance => instance.ServiceKey.ServiceName, StringComparer.Ordinal)
+            .ThenBy(instance => instance.InstanceId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public NodeProfile? GetNodeProfile(string nodeId)
     {
         return _nodeProfiles.TryGetValue(nodeId, out var profile) ? profile : null;

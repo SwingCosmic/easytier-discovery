@@ -91,7 +91,7 @@ public sealed class PeerObservationMapper
     {
         if (string.IsNullOrWhiteSpace(value))
         {
-            return value;
+            return null;
         }
 
         var slash = value.IndexOf('/');

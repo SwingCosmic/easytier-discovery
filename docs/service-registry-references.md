@@ -12,6 +12,30 @@
 - [05. 关键算法与机制清单](./service-registry-references/key-mechanisms.md)
 - [06. 待补充资料清单](./service-registry-references/backlog.md)
 
+## 当前重点参考
+
+这一轮服务注册实现，重点参考以下几类系统的应用层 API 设计：
+
+- Consul
+  - `register / deregister / maintenance`
+  - 参考其“实例由 agent 或本地进程上报、管理端可额外覆盖实例状态”的接口分层
+- Nacos
+  - `register / deregister / beat / metadata / list`
+  - 参考其实例资源模型、心跳接口和元数据独立更新方式
+- Eureka
+  - `register / cancel / heartbeat / status override`
+  - 参考其“注册、续租、管理端状态覆盖”分别建模的做法
+- Kubernetes EndpointSlice
+  - `ready / serving / terminating`
+  - 参考其“可被流量选择”与“正在终止/排空”状态拆分
+
+EtDiscovery 本轮拟采纳的 API 风格：
+
+- 以“实例资源”作为核心，而不是只围绕“服务名”设计接口
+- 注册与下线分离，允许调用方显式控制实例生命周期
+- 续租、健康、运维状态、元数据更新拆为独立辅助接口
+- 管理端主动上下线 node/instance 的接口先占位，后续补充实现
+
 ## 使用约定
 
 - 概览型内容放在索引相邻的专题文档里，不再堆回本页。

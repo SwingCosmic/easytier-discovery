@@ -56,6 +56,9 @@
 - `GET /health`
 - `GET /easytier/peers`
 - `GET /test/ping`
+- `POST /discovery/instances`
+- `DELETE /discovery/instances/{instanceId}`
+- `GET /discovery/instances/{instanceId}`
 - `GET /discovery/services`
 - `GET /discovery/select`
 
@@ -63,12 +66,15 @@
 
 - 通过 `easytier-cli` 读取 peer 列表
 - 按 `network-name` 和 `virtual-network-cidr` 过滤 discovery 候选
-- 使用配置中的固定服务名与端口，生成远端 worker 对应的 `ServiceInstance`
+- 维护实例注册表，按 `instanceId` upsert / deregister 真实服务实例
+- `/discovery/services` 返回已注册且当前可发现的实例列表
 
 ### 3.5 worker 侧能力
 
 - 可加入现有 EasyTier 网络
 - 可暴露最小 `/test/ping`
+- 可根据 `Services[]` 配置主动向 registry 注册服务实例
+- 当本机同时具备 `registry + worker` 角色时，可直接走进程内注册逻辑
 - 可选择：
   - 显式配置静态 `Ipv4`
   - 在未配置 `Ipv4` 时追加 `--dhcp`
@@ -79,7 +85,7 @@
 
 - 最小 Web 应用可以正常运行
 - `registry` 与 `worker` 的核心逻辑链路已经打通
-- `registry` 可以读取 EasyTier peer 状态并生成 discovery 视图
+- `registry` 可以读取 EasyTier peer 状态并结合实例注册表生成 discovery 视图
 - 增强日志和 `/health` 输出后，排查体验已明显改善
 
 ### 4.2 已确认的 EasyTier 行为
@@ -151,8 +157,10 @@
 
 ### 6.2 服务元数据
 
-- 首版未实现 worker 自注册
-- `registry` 侧仍使用固定配置生成 worker 服务实例
+- worker 已实现主动注册/下线服务实例
+- registry 已支持一个服务名对应多个实例
+- registry 自身兼任 worker 时，也可把本机服务实例注册到目录中
+- 配置结构已从单服务字段切换为 `Services[]`
 
 ### 6.3 状态观测
 
@@ -171,6 +179,19 @@
   - `privilegeChecklist`
   - `easyTier.recentStdout`
   - `easyTier.recentStderr`
+
+### 6.4 内存状态读取模型
+
+- 当前原型在内存中维护一份共享数据源：
+  - EasyTier 节点观测快照
+  - 已注册服务实例表
+  - 已构建的 discovery catalog
+- 数据源本身允许后台线程并发更新，因此实现上优先使用并发集合或“整体替换快照引用”的方式。
+- 对外接口的读取语义是“瞬时快照”：
+  - 每次请求都读取当前时刻可见的数据
+  - 不保证连续两次读取完全一致
+  - 不要求节点状态、实例状态、选择结果之间形成强一致事务视图
+- 这样做是有意设计，因为在 EasyTier 节点观测和服务注册场景里，底层事实本身就存在传播延迟、掉线抖动和短暂不确定性。
 
 ## 7. 推荐验证路径
 

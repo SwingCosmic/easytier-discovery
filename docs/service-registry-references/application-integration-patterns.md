@@ -54,3 +54,34 @@
 
 - etdiscovery 做发现、筛选、评分、推荐
 - 业务框架做连接、重试、序列化、协议处理
+
+## 5. 面向迁移的注册 API 风格归纳
+
+为了让已有业务代码从 Consul、Nacos、Eureka 一类系统迁移到 EtDiscovery 时成本更低，这一轮接口风格统一采用以下约定：
+
+- 以“实例资源”作为核心对象
+  - 服务名只是筛选维度，不是唯一控制入口
+- 注册与下线分离
+  - `POST /discovery/instances`
+  - `DELETE /discovery/instances/{instanceId}`
+- 查询接口同时支持“按服务看实例”和“按实例直接定位”
+  - `GET /discovery/services?serviceName=...`
+  - `GET /discovery/instances/{instanceId}`
+- 辅助状态接口独立占位
+  - `lease`
+  - `health`
+  - `status`
+  - `metadata`
+
+这样做的直接好处是：
+
+- worker 周期性 upsert 比较自然
+- 管理端主动下线/恢复不需要伪装成删除注册
+- 后续扩展心跳、draining、metadata 增量更新时，不需要重做主接口
+
+与读取模型配套的实现原则：
+
+- 内存里维护一份共享数据源，允许并发更新
+- 所有读接口直接读取该数据源的瞬时快照
+- 不为了追求强一致而在整个读取路径上加重锁
+- 这更符合服务发现系统“最终一致、短暂抖动可接受”的现实语义

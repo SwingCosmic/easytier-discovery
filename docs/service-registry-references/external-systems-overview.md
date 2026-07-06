@@ -45,6 +45,17 @@
 - [What is Nacos](https://nacos.io/en/docs/latest/what-is-nacos/)
 - [Nacos Open API](https://nacos.io/en/docs/latest/manual/user/open-api/)
 
+接口设计补充：
+
+- 资源模型以实例为主，服务是实例的归属容器
+- 注册与下线接口天然幂等，便于 worker 周期性重报
+- 心跳接口独立于注册接口，适合把“首次注册”和“保活”拆开
+- 实例 metadata、健康状态和实例列表查询也都是独立接口
+- 对 EtDiscovery 的直接启发是：
+  - `POST /discovery/instances`
+  - `DELETE /discovery/instances/{instanceId}`
+  - 后续预留单独的 `lease / health / metadata` 子接口
+
 ## 3. Consul
 
 适合借鉴：
@@ -66,6 +77,21 @@
 
 - [Consul Service Discovery](https://developer.hashicorp.com/consul/docs/discover/service-dynamic-discovery)
 - [Consul Prepared Queries](https://developer.hashicorp.com/consul/docs/discover/load-balancer/prepared-query)
+- [Consul Agent Service API](https://developer.hashicorp.com/consul/api-docs/agent/service)
+
+接口设计补充：
+
+- 注册、注销和 maintenance 模式是拆开的
+- 管理端可对实例施加额外服务状态，而不必销毁注册记录
+- 这种风格适合 EtDiscovery 预留：
+  - `PUT /discovery/instances/{instanceId}/status`
+  - `DELETE /discovery/instances/{instanceId}/status`
+  - `PUT /discovery/nodes/{nodeId}/status`
+  - `DELETE /discovery/nodes/{nodeId}/status`
+
+不直接照搬的部分：
+
+- Consul 很多接口默认围绕本地 agent 组织，而 EtDiscovery 当前先用最小 HTTP registry 形态
 
 ## 4. Orleans
 
@@ -87,3 +113,44 @@
 参考：
 
 - [Orleans Cluster Management](https://learn.microsoft.com/en-us/dotnet/orleans/implementation/cluster-management)
+
+## 5. Eureka
+
+适合借鉴：
+
+- application / instance 分层
+- register / cancel / heartbeat 分离
+- 管理端状态覆盖可与自动状态并存
+
+不直接照搬：
+
+- 其应用名主导的资源路径偏重 Java 生态约定，不必原样沿用
+
+对本方案的启发：
+
+- 把“注册”和“续租”拆成独立语义
+- 允许实例既有自动可达状态，也有人工 `OUT_OF_SERVICE` 一类状态
+
+参考：
+
+- [Eureka REST Operations](https://github.com/Netflix/eureka/wiki/eureka-rest-operations)
+
+## 6. Kubernetes EndpointSlice
+
+适合借鉴：
+
+- `ready / serving / terminating` 的状态拆分
+- 面向 endpoint/instance 的列表管理方式
+
+不直接照搬：
+
+- 不引入 Kubernetes 那套资源版本、控制器和 declarative reconciliation 全量机制
+
+对本方案的启发：
+
+- EtDiscovery 后续应避免只用一个布尔值表达实例可用性
+- 本轮虽然只先占位，但接口设计上要给 `health` 与 `status/draining` 分离留下空间
+
+参考：
+
+- [Kubernetes EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/)

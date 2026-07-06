@@ -19,10 +19,20 @@
   - 托管 `easytier-core`
   - 通过 `easytier-cli` 读取真实 peer 状态
   - 将 peer 状态映射为 `registry` 视角下的 discovery 候选
-  - 提供 `/health`、`/easytier/peers`、`/test/ping`、`/discovery/services`、`/discovery/select`
+  - worker 通过 HTTP 向 `registry` 主动注册/下线服务实例
+  - `registry + worker` 同机时可直接注册本机服务实例
+  - 提供 `/health`、`/easytier/peers`、`/test/ping`、`/discovery/services`、`/discovery/select`、`/discovery/instances`
 - API 路径已经统一去掉 `/api` 前缀。
 - 原型中的角色、接口、配置项均统一使用 `registry / worker / client`，不再使用 A/B/C 简写。
 - 启动输入中仅 `--roles` 必须通过命令行显式传入，其余参数统一从配置文件读取。
+- 服务发布配置已经从单服务字段切换为 `Services[]` 数组；`/discovery/services` 现在反映真实已注册实例，而不是固定拼装结果。
+- 当前原型对 discovery 数据采用“单份内存数据源 + 并发集合 + 瞬时快照读取”的设计：
+  - 内存里维护一份支持并发更新的注册/观测数据
+  - 所有查询接口都读取该数据源在某一时刻的快照视图
+  - 允许短时间内两次读取结果不同，不要求强一致
+- worker 定位 registry 时：
+  - 优先使用显式配置的 `RegistryPeer`
+  - 否则回退到首个远端可发现 peer 的 `VirtualIp`
 
 ## 当前注意事项
 

@@ -7,6 +7,7 @@ public sealed class DiscoveryRefreshBackgroundService : BackgroundService
     private readonly EtDiscoveryWebOptions _options;
     private readonly EasyTierObservationService _observationService;
     private readonly RegistrySnapshotBuilder _snapshotBuilder;
+    private readonly DiscoveryInstanceRegistry _instanceRegistry;
     private readonly DiscoveryCatalogService _catalogService;
     private readonly ILogger<DiscoveryRefreshBackgroundService> _logger;
     private HashSet<string> _lastCandidateNodeIds = [];
@@ -16,12 +17,14 @@ public sealed class DiscoveryRefreshBackgroundService : BackgroundService
         EtDiscoveryWebOptions options,
         EasyTierObservationService observationService,
         RegistrySnapshotBuilder snapshotBuilder,
+        DiscoveryInstanceRegistry instanceRegistry,
         DiscoveryCatalogService catalogService,
         ILogger<DiscoveryRefreshBackgroundService> logger)
     {
         _options = options;
         _observationService = observationService;
         _snapshotBuilder = snapshotBuilder;
+        _instanceRegistry = instanceRegistry;
         _catalogService = catalogService;
         _logger = logger;
     }
@@ -38,7 +41,7 @@ public sealed class DiscoveryRefreshBackgroundService : BackgroundService
             try
             {
                 var observation = await _observationService.GetCurrentSnapshotAsync(stoppingToken);
-                var snapshot = _snapshotBuilder.Build(observation);
+                var snapshot = _snapshotBuilder.Build(observation, _instanceRegistry.GetRegisteredInstances());
                 LogDiscoveryChanges(observation, snapshot);
                 _catalogService.ApplySnapshot(snapshot);
             }
@@ -64,7 +67,10 @@ public sealed class DiscoveryRefreshBackgroundService : BackgroundService
                 nodeId,
                 peer?.Hostname ?? "<unknown>",
                 string.IsNullOrWhiteSpace(peer?.VirtualIp) ? "<empty>" : peer!.VirtualIp,
-                _options.RegistryWorkerServiceName ?? _options.WorkerServiceName ?? "<unknown>");
+                string.Join(',', snapshot.Instances
+                    .Where(instance => string.Equals(instance.NodeId, nodeId, StringComparison.Ordinal))
+                    .Select(instance => instance.ServiceKey.ServiceName)
+                    .Distinct(StringComparer.Ordinal)));
         }
 
         foreach (var nodeId in _lastCandidateNodeIds.Except(candidateNodeIds, StringComparer.Ordinal))

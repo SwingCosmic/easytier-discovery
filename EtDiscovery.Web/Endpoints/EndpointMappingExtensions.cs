@@ -1,3 +1,5 @@
+using EtDiscovery.Core.Models;
+using EtDiscovery.Web.Models;
 using EtDiscovery.Web.Services;
 
 namespace EtDiscovery.Web.Endpoints;
@@ -27,6 +29,13 @@ public static class EndpointMappingExtensions
                 observedLocalVirtualIp = lastObservation?.LocalNode.VirtualIp,
                 observedLocalNodeId = lastObservation?.LocalNode.NodeId,
                 easyTier = processManager.GetStatus(),
+                publishedServices = options.Services.Select(service => new
+                {
+                    service.ServiceName,
+                    service.Port,
+                    service.Protocol,
+                    service.InstanceId,
+                }),
                 lastObservationAt = lastObservation?.ObservedAt,
                 lastRefreshAt = catalogService.GetLastRefreshAt(),
             });
@@ -69,29 +78,86 @@ public static class EndpointMappingExtensions
             return Results.Ok(new
             {
                 roles = options.Roles.Select(role => role.ToString().ToLowerInvariant()).ToArray(),
-                serviceName = options.WorkerServiceName ?? options.RegistryWorkerServiceName,
-                servicePort = options.WorkerServicePort ?? options.RegistryWorkerServicePort,
+                services = options.Services.Select(service => new
+                {
+                    service.ServiceName,
+                    service.Port,
+                    service.Protocol,
+                    service.InstanceId,
+                }),
                 networkName = options.NetworkName,
                 timestamp = DateTimeOffset.UtcNow,
             });
         });
 
-        endpoints.MapGet("/discovery/services", (EtDiscoveryWebOptions options, DiscoveryCatalogService catalogService) =>
+        endpoints.MapPost("/discovery/instances", (
+            RegisterServiceRequest request,
+            EtDiscoveryWebOptions options,
+            DiscoveryInstanceRegistry registry) =>
         {
             if (!options.IsRegistry)
             {
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
-            var services = catalogService.ResolveServices()
+            var record = registry.Upsert(request);
+            return Results.Ok(ToInstancePayload(record));
+        });
+
+        endpoints.MapDelete("/discovery/instances/{instanceId}", (
+            string instanceId,
+            EtDiscoveryWebOptions options,
+            DiscoveryInstanceRegistry registry) =>
+        {
+            if (!options.IsRegistry)
+            {
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            }
+
+            return registry.Deregister(instanceId)
+                ? Results.NoContent()
+                : Results.NotFound();
+        });
+
+        endpoints.MapGet("/discovery/instances/{instanceId}", (
+            string instanceId,
+            EtDiscoveryWebOptions options,
+            DiscoveryInstanceRegistry registry) =>
+        {
+            if (!options.IsRegistry)
+            {
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            }
+
+            var record = registry.Get(instanceId);
+            return record is null
+                ? Results.NotFound()
+                : Results.Ok(ToInstancePayload(record));
+        });
+
+        endpoints.MapGet("/discovery/services", (
+            string? serviceName,
+            EtDiscoveryWebOptions options,
+            DiscoveryCatalogService catalogService) =>
+        {
+            if (!options.IsRegistry)
+            {
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            }
+
+            var services = catalogService.ResolveServices(serviceName)
                 .Select(instance => new
                 {
                     instanceId = instance.InstanceId,
                     nodeId = instance.NodeId,
                     serviceName = instance.ServiceKey.ServiceName,
+                    protocol = instance.Protocol,
                     address = instance.Address,
                     port = instance.Port,
                     virtualIp = instance.VirtualIp,
+                    version = instance.Version,
+                    group = instance.Group,
+                    tags = instance.Tags,
                 });
 
             return Results.Ok(services);
@@ -121,6 +187,59 @@ public static class EndpointMappingExtensions
             });
         });
 
+        MapPlaceholder(endpoints.MapPut("/discovery/instances/{instanceId}/lease", () => Results.StatusCode(StatusCodes.Status501NotImplemented)));
+        MapPlaceholder(endpoints.MapPut("/discovery/instances/{instanceId}/health", () => Results.StatusCode(StatusCodes.Status501NotImplemented)));
+        MapPlaceholder(endpoints.MapPut("/discovery/instances/{instanceId}/status", () => Results.StatusCode(StatusCodes.Status501NotImplemented)));
+        MapPlaceholder(endpoints.MapDelete("/discovery/instances/{instanceId}/status", () => Results.StatusCode(StatusCodes.Status501NotImplemented)));
+        MapPlaceholder(endpoints.MapPut("/discovery/instances/{instanceId}/metadata", () => Results.StatusCode(StatusCodes.Status501NotImplemented)));
+        MapPlaceholder(endpoints.MapGet("/discovery/instances", () => Results.StatusCode(StatusCodes.Status501NotImplemented)));
+        MapPlaceholder(endpoints.MapGet("/discovery/nodes/{nodeId}/instances", () => Results.StatusCode(StatusCodes.Status501NotImplemented)));
+        MapPlaceholder(endpoints.MapPut("/discovery/nodes/{nodeId}/status", () => Results.StatusCode(StatusCodes.Status501NotImplemented)));
+        MapPlaceholder(endpoints.MapDelete("/discovery/nodes/{nodeId}/status", () => Results.StatusCode(StatusCodes.Status501NotImplemented)));
+
         return endpoints;
+    }
+
+    private static void MapPlaceholder(RouteHandlerBuilder builder)
+    {
+        builder.WithDisplayName("placeholder-not-implemented");
+    }
+
+    private static object ToInstancePayload(RegisteredDiscoveryInstance record)
+    {
+        return new
+        {
+            instanceId = record.InstanceId,
+            service = new
+            {
+                @namespace = record.Definition.Namespace,
+                serviceName = record.Definition.ServiceName,
+                protocol = record.Definition.Protocol,
+                version = record.Definition.Version,
+                group = record.Definition.Group,
+                tags = record.Definition.Tags,
+            },
+            instance = new
+            {
+                nodeId = record.Instance.NodeId,
+                address = record.Instance.Address,
+                port = record.Instance.Port,
+                virtualIp = record.Instance.VirtualIp,
+                protocol = record.Instance.Protocol,
+                weight = record.Instance.Weight,
+                status = record.Instance.Status.ToString(),
+                healthState = record.Instance.HealthState.ToString(),
+                endpoints = record.Instance.Endpoints.Select(endpoint => new
+                {
+                    endpoint.Address,
+                    endpoint.Port,
+                    endpoint.Protocol,
+                    callMode = endpoint.CallMode.ToString(),
+                    endpoint.IsRecommended,
+                }),
+            },
+            registeredAt = record.RegisteredAt,
+            updatedAt = record.UpdatedAt,
+        };
     }
 }

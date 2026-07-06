@@ -1,4 +1,5 @@
 using EtDiscovery.Web.Models;
+using System.Threading;
 
 namespace EtDiscovery.Web.Services;
 
@@ -8,7 +9,6 @@ public sealed class EasyTierObservationService
     private readonly EasyTierCliClient _cliClient;
     private readonly PeerObservationMapper _mapper;
     private readonly ILogger<EasyTierObservationService> _logger;
-    private readonly object _sync = new();
     private EasyTierObservationSnapshot? _lastSnapshot;
 
     public EasyTierObservationService(
@@ -41,30 +41,19 @@ public sealed class EasyTierObservationService
 
         var snapshot = _mapper.Map(_options, nodeInfo, peers, foreignNetworks);
         LogSnapshotChanges(snapshot);
-
-        lock (_sync)
-        {
-            _lastSnapshot = snapshot;
-        }
+        Volatile.Write(ref _lastSnapshot, snapshot);
 
         return snapshot;
     }
 
     public EasyTierObservationSnapshot? GetLastSnapshot()
     {
-        lock (_sync)
-        {
-            return _lastSnapshot;
-        }
+        return Volatile.Read(ref _lastSnapshot);
     }
 
     private void LogSnapshotChanges(EasyTierObservationSnapshot currentSnapshot)
     {
-        EasyTierObservationSnapshot? previousSnapshot;
-        lock (_sync)
-        {
-            previousSnapshot = _lastSnapshot;
-        }
+        var previousSnapshot = Volatile.Read(ref _lastSnapshot);
 
         if (previousSnapshot is null)
         {

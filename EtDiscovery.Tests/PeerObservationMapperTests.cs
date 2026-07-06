@@ -102,21 +102,7 @@ public class PeerObservationMapperTests
     [Test]
     public void FallsBackToConfiguredLocalVirtualIpWhenNodeInfoIsEmpty()
     {
-        var baseOptions = CreateOptions();
-        var options = new EtDiscoveryWebOptions
-        {
-            Roles = baseOptions.Roles,
-            EasyTierCorePath = baseOptions.EasyTierCorePath,
-            EasyTierCliPath = baseOptions.EasyTierCliPath,
-            NetworkName = baseOptions.NetworkName,
-            NetworkSecret = baseOptions.NetworkSecret,
-            VirtualNetworkCidr = baseOptions.VirtualNetworkCidr,
-            Ipv4 = "10.144.144.9",
-            ListenUrl = baseOptions.ListenUrl,
-            Peers = baseOptions.Peers,
-            RegistryWorkerServiceName = baseOptions.RegistryWorkerServiceName,
-            RegistryWorkerServicePort = baseOptions.RegistryWorkerServicePort,
-        };
+        var options = TestSamples.WebOptions(ipv4: "10.144.144.9");
 
         var mapper = new PeerObservationMapper();
         var snapshot = mapper.Map(
@@ -144,17 +130,5 @@ public class PeerObservationMapperTests
         Assert.That(snapshot.Peers.Single().EligibleForDiscovery, Is.True);
     }
 
-    private static EtDiscoveryWebOptions CreateOptions() => new()
-    {
-        Roles = [RoleName.Registry],
-        EasyTierCorePath = "/usr/local/bin/easytier-core",
-        EasyTierCliPath = "/usr/local/bin/easytier-cli",
-        NetworkName = "demo-net",
-        NetworkSecret = "demo-secret",
-        VirtualNetworkCidr = Ipv4Cidr.Parse("10.144.144.0/24"),
-        ListenUrl = "http://127.0.0.1:8080",
-        Peers = [],
-        RegistryWorkerServiceName = "echo",
-        RegistryWorkerServicePort = 8081,
-    };
+    private static EtDiscoveryWebOptions CreateOptions() => TestSamples.WebOptions();
 }
