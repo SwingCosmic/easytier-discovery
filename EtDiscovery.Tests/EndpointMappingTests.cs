@@ -31,12 +31,15 @@ public class EndpointMappingTests
         builder.Services.AddSingleton(new DiscoveryNodeContext("local-node", [NodeRole.Registry]));
         builder.Services.AddSingleton(new DiscoveryEngine(new ReachableNodeProcessingPolicy(), new RoundRobinServiceSelectionPolicy()));
         builder.Services.AddSingleton<DiscoveryInstanceRegistry>();
+        builder.Services.AddSingleton<EasyTierConfigGenerator>();
         builder.Services.AddSingleton<EtDiscoveryProcessManager>();
         builder.Services.AddSingleton<EasyTierCliClient>();
         builder.Services.AddSingleton<PeerObservationMapper>();
         builder.Services.AddSingleton<EasyTierObservationService>();
+        builder.Services.AddSingleton<RegistryLocator>();
         builder.Services.AddSingleton<RegistrySnapshotBuilder>();
         builder.Services.AddSingleton<DiscoveryCatalogService>();
+        builder.Services.AddHttpClient(nameof(RegistryLocator));
         builder.Services.AddLogging();
 
         var app = builder.Build();
@@ -51,6 +54,7 @@ public class EndpointMappingTests
         Assert.That(routes, Does.Contain("/health"));
         Assert.That(routes, Does.Contain("/easytier/peers"));
         Assert.That(routes, Does.Contain("/test/ping"));
+        Assert.That(routes, Does.Contain("/discovery/registry"));
         Assert.That(routes, Does.Contain("/discovery/instances"));
         Assert.That(routes, Does.Contain("/discovery/instances/{instanceId}"));
         Assert.That(routes, Does.Contain("/discovery/services"));

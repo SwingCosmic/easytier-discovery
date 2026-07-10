@@ -9,23 +9,40 @@ public sealed class EtDiscoveryProcessManager : IHostedService, IDisposable
 {
     private const int MaxBufferedLogLines = 20;
     private readonly EtDiscoveryWebOptions _options;
+    private readonly EasyTierConfigGenerator _configGenerator;
     private readonly ILogger<EtDiscoveryProcessManager> _logger;
     private readonly object _sync = new();
     private Process? _process;
     private DateTimeOffset? _startedAt;
     private int? _exitCode;
     private string? _lastError;
+    private string? _generatedConfigPath;
     private readonly Queue<string> _recentStdout = new();
     private readonly Queue<string> _recentStderr = new();
 
-    public EtDiscoveryProcessManager(EtDiscoveryWebOptions options, ILogger<EtDiscoveryProcessManager> logger)
+    public EtDiscoveryProcessManager(
+        EtDiscoveryWebOptions options,
+        EasyTierConfigGenerator configGenerator,
+        ILogger<EtDiscoveryProcessManager> logger)
     {
         _options = options;
+        _configGenerator = configGenerator;
         _logger = logger;
         RpcPortalAddress = AllocateRpcPortalAddress();
     }
 
     public string RpcPortalAddress { get; }
+
+    public string? GeneratedConfigPath
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _generatedConfigPath;
+            }
+        }
+    }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -45,7 +62,8 @@ public sealed class EtDiscoveryProcessManager : IHostedService, IDisposable
 
             EnsurePrivileges();
 
-            var startInfo = BuildStartInfo();
+            _generatedConfigPath = _configGenerator.WriteTempConfig(_options);
+            var startInfo = BuildStartInfo(_generatedConfigPath);
             var process = new Process
             {
                 StartInfo = startInfo,
@@ -64,10 +82,11 @@ public sealed class EtDiscoveryProcessManager : IHostedService, IDisposable
                 }
 
                 _logger.LogWarning(
-                    "easytier-core exited. pid={Pid} exitCode={ExitCode} rpcPortal={RpcPortalAddress} recentStderr={RecentStderr} recentStdout={RecentStdout}",
+                    "easytier-core exited. pid={Pid} exitCode={ExitCode} rpcPortal={RpcPortalAddress} config={ConfigPath} recentStderr={RecentStderr} recentStdout={RecentStdout}",
                     process.Id,
                     process.ExitCode,
                     RpcPortalAddress,
+                    _generatedConfigPath,
                     recentStderr.Length == 0 ? "<empty>" : string.Join(Environment.NewLine, recentStderr),
                     recentStdout.Length == 0 ? "<empty>" : string.Join(Environment.NewLine, recentStdout));
             };
@@ -110,16 +129,20 @@ public sealed class EtDiscoveryProcessManager : IHostedService, IDisposable
             _process = process;
             _startedAt = DateTimeOffset.UtcNow;
 
+            var (appId, flags) = _options.GetAdvertisedNodeTypeMetadata();
             _logger.LogInformation(
-                "Started easytier-core. pid={Pid} roles={Roles} networkName={NetworkName} instanceName={InstanceName} virtualIp={VirtualIp} dhcpEnabled={DhcpEnabled} rpcPortal={RpcPortalAddress} peers={PeerCount}",
+                "Started easytier-core. pid={Pid} roles={Roles} networkName={NetworkName} instanceName={InstanceName} virtualIp={VirtualIp} dhcpEnabled={DhcpEnabled} rpcPortal={RpcPortalAddress} config={ConfigPath} peers={PeerCount} nodeTypeAppId={NodeTypeAppId} nodeTypeFlags=0x{NodeTypeFlags:X8}",
                 process.Id,
                 string.Join(",", _options.Roles.Select(role => role.ToString().ToLowerInvariant())),
                 _options.NetworkName,
-                _options.EasyTierInstanceName,
+                _options.EasyTier.InstanceName,
                 _options.ConfiguredVirtualIp ?? "<auto>",
                 _options.ShouldEnableDhcp,
                 RpcPortalAddress,
-                _options.Peers.Count);
+                _generatedConfigPath,
+                _options.EasyTier.Peers.Count,
+                appId,
+                flags);
         }
 
         await Task.CompletedTask;
@@ -128,71 +151,74 @@ public sealed class EtDiscoveryProcessManager : IHostedService, IDisposable
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         Process? process;
+        string? configPath;
         lock (_sync)
         {
             process = _process;
             _process = null;
+            configPath = _generatedConfigPath;
         }
 
-        if (process is null)
+        if (process is not null)
         {
-            return;
-        }
+            _logger.LogInformation("Stopping easytier-core. pid={Pid}", process.Id);
 
-        _logger.LogInformation("Stopping easytier-core. pid={Pid}", process.Id);
-
-        try
-        {
-            if (process.HasExited)
+            try
             {
-                _exitCode = process.ExitCode;
-                return;
-            }
-
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            else
-            {
-                try
+                if (process.HasExited)
                 {
-                    var killStartInfo = new ProcessStartInfo
-                    {
-                        FileName = "/bin/kill",
-                        RedirectStandardError = true,
-                        RedirectStandardOutput = true,
-                        UseShellExecute = false,
-                    };
-                    killStartInfo.ArgumentList.Add("-TERM");
-                    killStartInfo.ArgumentList.Add(process.Id.ToString());
-                    using var killer = Process.Start(killStartInfo);
+                    _exitCode = process.ExitCode;
                 }
-                catch (Exception ex)
-                {
-                    _lastError = ex.Message;
-                }
-
-                await Task.WhenAny(process.WaitForExitAsync(cancellationToken), Task.Delay(TimeSpan.FromSeconds(3), cancellationToken));
-                if (!process.HasExited)
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 {
                     process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync(cancellationToken);
+                    _exitCode = process.ExitCode;
+                }
+                else
+                {
+                    try
+                    {
+                        var killStartInfo = new ProcessStartInfo
+                        {
+                            FileName = "/bin/kill",
+                            RedirectStandardError = true,
+                            RedirectStandardOutput = true,
+                            UseShellExecute = false,
+                        };
+                        killStartInfo.ArgumentList.Add("-TERM");
+                        killStartInfo.ArgumentList.Add(process.Id.ToString());
+                        using var killer = Process.Start(killStartInfo);
+                    }
+                    catch (Exception ex)
+                    {
+                        _lastError = ex.Message;
+                    }
+
+                    await Task.WhenAny(process.WaitForExitAsync(cancellationToken), Task.Delay(TimeSpan.FromSeconds(3), cancellationToken));
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+
+                    await process.WaitForExitAsync(cancellationToken);
+                    _exitCode = process.ExitCode;
                 }
             }
+            catch (Exception ex)
+            {
+                _lastError = ex.Message;
+            }
+        }
 
-            await process.WaitForExitAsync(cancellationToken);
-            _exitCode = process.ExitCode;
-        }
-        catch (Exception ex)
-        {
-            _lastError = ex.Message;
-        }
+        TryDeleteConfig(configPath);
     }
 
     public EasyTierProcessStatus GetStatus()
     {
         lock (_sync)
         {
+            var (appId, flags) = _options.GetAdvertisedNodeTypeMetadata();
             return new EasyTierProcessStatus
             {
                 RpcPortalAddress = RpcPortalAddress,
@@ -203,78 +229,38 @@ public sealed class EtDiscoveryProcessManager : IHostedService, IDisposable
                 LastError = _lastError,
                 RecentStdout = _recentStdout.ToArray(),
                 RecentStderr = _recentStderr.ToArray(),
-                Arguments = BuildArgumentSummary(),
+                ConfigPath = _generatedConfigPath,
+                Arguments = BuildArgumentSummary(_generatedConfigPath),
+                NodeTypeAppId = appId,
+                NodeTypeFlags = flags,
             };
         }
     }
 
-    private ProcessStartInfo BuildStartInfo()
+    private ProcessStartInfo BuildStartInfo(string configPath)
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = _options.EasyTierCorePath,
+            FileName = _options.EasyTier.CorePath,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
         };
 
-        startInfo.ArgumentList.Add("--network-name");
-        startInfo.ArgumentList.Add(_options.NetworkName);
-        startInfo.ArgumentList.Add("--instance-name");
-        startInfo.ArgumentList.Add(_options.EasyTierInstanceName);
-        startInfo.ArgumentList.Add("--network-secret");
-        startInfo.ArgumentList.Add(_options.NetworkSecret);
+        startInfo.ArgumentList.Add("-c");
+        startInfo.ArgumentList.Add(configPath);
         startInfo.ArgumentList.Add("--rpc-portal");
         startInfo.ArgumentList.Add(RpcPortalAddress);
-
-        if (!string.IsNullOrWhiteSpace(_options.Ipv4))
-        {
-            startInfo.ArgumentList.Add("--ipv4");
-            startInfo.ArgumentList.Add(_options.Ipv4);
-        }
-
-        if (_options.ShouldEnableDhcp)
-        {
-            startInfo.ArgumentList.Add("--dhcp");
-        }
-
-        foreach (var peer in _options.Peers)
-        {
-            startInfo.ArgumentList.Add("--peers");
-            startInfo.ArgumentList.Add(peer);
-        }
-
         return startInfo;
     }
 
-    private IReadOnlyList<string> BuildArgumentSummary()
+    private IReadOnlyList<string> BuildArgumentSummary(string? configPath)
     {
-        var summary = new List<string>
-        {
-            "--network-name", _options.NetworkName,
-            "--instance-name", _options.EasyTierInstanceName,
-            "--network-secret", "***",
+        return
+        [
+            "-c", configPath ?? "<pending>",
             "--rpc-portal", RpcPortalAddress,
-        };
-
-        if (!string.IsNullOrWhiteSpace(_options.Ipv4))
-        {
-            summary.Add("--ipv4");
-            summary.Add(_options.Ipv4);
-        }
-
-        if (_options.ShouldEnableDhcp)
-        {
-            summary.Add("--dhcp");
-        }
-
-        foreach (var peer in _options.Peers)
-        {
-            summary.Add("--peers");
-            summary.Add(peer);
-        }
-
-        return summary;
+        ];
     }
 
     private static string AllocateRpcPortalAddress()
@@ -321,6 +307,26 @@ public sealed class EtDiscoveryProcessManager : IHostedService, IDisposable
         }
     }
 
+    private void TryDeleteConfig(string? configPath)
+    {
+        if (string.IsNullOrWhiteSpace(configPath))
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(configPath))
+            {
+                File.Delete(configPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to delete generated EasyTier config {ConfigPath}", configPath);
+        }
+    }
+
     public void Dispose()
     {
         if (_process is not null)
@@ -336,6 +342,7 @@ public sealed class EtDiscoveryProcessManager : IHostedService, IDisposable
         }
 
         _process?.Dispose();
+        TryDeleteConfig(_generatedConfigPath);
     }
 }
 
@@ -358,4 +365,10 @@ public sealed class EasyTierProcessStatus
     public IReadOnlyList<string> RecentStderr { get; init; } = [];
 
     public IReadOnlyList<string> Arguments { get; init; } = [];
+
+    public string? ConfigPath { get; init; }
+
+    public uint NodeTypeAppId { get; init; }
+
+    public uint NodeTypeFlags { get; init; }
 }

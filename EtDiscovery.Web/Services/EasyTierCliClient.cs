@@ -28,24 +28,40 @@ public sealed class EasyTierCliClient
     }
 
     public Task<IReadOnlyList<EasyTierPeerListItem>> GetPeerListAsync(CancellationToken cancellationToken)
-        => ReadOrEmptyAsync<IReadOnlyList<EasyTierPeerListItem>>(new[] { "peer", "list" }, cancellationToken);
+        => ReadOrEmptyAsync<IReadOnlyList<EasyTierPeerListItem>>(
+            ["peer", "list"],
+            verbose: false,
+            cancellationToken);
+
+    /// <summary>
+    /// Verbose peer list returns full route objects, including node_type_* metadata.
+    /// </summary>
+    public Task<IReadOnlyList<EasyTierPeerRoutePair>> GetPeerRoutePairsVerboseAsync(CancellationToken cancellationToken)
+        => ReadOrEmptyAsync<IReadOnlyList<EasyTierPeerRoutePair>>(
+            ["peer", "list"],
+            verbose: true,
+            cancellationToken);
 
     public Task<EasyTierNodeInfo?> GetNodeInfoAsync(CancellationToken cancellationToken)
-        => RunJsonAsync<EasyTierNodeInfo>(new[] { "node", "info" }, cancellationToken);
+        => RunJsonAsync<EasyTierNodeInfo>(["node", "info"], verbose: false, cancellationToken);
 
     public Task<Dictionary<string, ForeignNetworkEntry>> GetForeignNetworksAsync(CancellationToken cancellationToken)
-        => ReadOrEmptyAsync<Dictionary<string, ForeignNetworkEntry>>(new[] { "peer", "list-foreign" }, cancellationToken);
+        => ReadOrEmptyAsync<Dictionary<string, ForeignNetworkEntry>>(
+            ["peer", "list-foreign"],
+            verbose: false,
+            cancellationToken);
 
-    private async Task<T> ReadOrEmptyAsync<T>(IReadOnlyList<string> subcommand, CancellationToken cancellationToken) where T : class
+    private async Task<T> ReadOrEmptyAsync<T>(IReadOnlyList<string> subcommand, bool verbose, CancellationToken cancellationToken)
+        where T : class
     {
-        return await RunJsonAsync<T>(subcommand, cancellationToken) ?? CreateEmptyResult<T>();
+        return await RunJsonAsync<T>(subcommand, verbose, cancellationToken) ?? CreateEmptyResult<T>();
     }
 
-    private async Task<T?> RunJsonAsync<T>(IReadOnlyList<string> subcommand, CancellationToken cancellationToken)
+    private async Task<T?> RunJsonAsync<T>(IReadOnlyList<string> subcommand, bool verbose, CancellationToken cancellationToken)
     {
         for (var attempt = 1; ; attempt++)
         {
-            var result = await RunOnceAsync<T>(subcommand, cancellationToken);
+            var result = await RunOnceAsync<T>(subcommand, verbose, cancellationToken);
             if (result.Success)
             {
                 return result.Value;
@@ -62,17 +78,20 @@ public sealed class EasyTierCliClient
                 attempt,
                 MaxTransientAttempts,
                 _processManager.RpcPortalAddress,
-                _options.EasyTierInstanceName);
+                _options.EasyTier.InstanceName);
 
             await Task.Delay(RetryDelay, cancellationToken);
         }
     }
 
-    private async Task<CliInvocationResult<T>> RunOnceAsync<T>(IReadOnlyList<string> subcommand, CancellationToken cancellationToken)
+    private async Task<CliInvocationResult<T>> RunOnceAsync<T>(
+        IReadOnlyList<string> subcommand,
+        bool verbose,
+        CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = _options.EasyTierCliPath,
+            FileName = _options.EasyTier.CliPath,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -81,9 +100,13 @@ public sealed class EasyTierCliClient
         startInfo.ArgumentList.Add("-p");
         startInfo.ArgumentList.Add(_processManager.RpcPortalAddress);
         startInfo.ArgumentList.Add("-n");
-        startInfo.ArgumentList.Add(_options.EasyTierInstanceName);
+        startInfo.ArgumentList.Add(_options.EasyTier.InstanceName);
         startInfo.ArgumentList.Add("-o");
         startInfo.ArgumentList.Add("json");
+        if (verbose)
+        {
+            startInfo.ArgumentList.Add("-v");
+        }
 
         foreach (var part in subcommand)
         {
@@ -118,6 +141,11 @@ public sealed class EasyTierCliClient
         if (typeof(T) == typeof(IReadOnlyList<EasyTierPeerListItem>))
         {
             return (T)(object)Array.Empty<EasyTierPeerListItem>();
+        }
+
+        if (typeof(T) == typeof(IReadOnlyList<EasyTierPeerRoutePair>))
+        {
+            return (T)(object)Array.Empty<EasyTierPeerRoutePair>();
         }
 
         if (typeof(T) == typeof(Dictionary<string, ForeignNetworkEntry>))

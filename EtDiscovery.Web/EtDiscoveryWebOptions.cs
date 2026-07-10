@@ -9,29 +9,31 @@ public sealed class EtDiscoveryWebOptions
 {
     public required IReadOnlyList<RoleName> Roles { get; init; }
 
-    public required string EasyTierCorePath { get; init; }
-
-    public required string EasyTierCliPath { get; init; }
-
-    public required string EasyTierInstanceName { get; init; }
-
+    /// <summary>
+    /// Temporarily kept on the EtDiscovery section for network identity matching and EasyTier TOML generation.
+    /// </summary>
     public required string NetworkName { get; init; }
 
+    /// <summary>
+    /// Temporarily kept on the EtDiscovery section for EasyTier TOML generation.
+    /// </summary>
     public required string NetworkSecret { get; init; }
 
     public required Ipv4Cidr VirtualNetworkCidr { get; init; }
 
-    public string? Ipv4 { get; init; }
-
     public required string ListenUrl { get; init; }
 
-    public required IReadOnlyList<string> Peers { get; init; }
+    public required IReadOnlyList<string> RegistryCandidates { get; init; }
+
+    public required int DiscoveryPort { get; init; }
+
+    public bool AutoDiscoverFromRouteMetadata { get; init; } = true;
 
     public required IReadOnlyList<PublishedServiceOptions> Services { get; init; }
 
-    public string? RegistryPeer { get; init; }
-
     public TimeSpan RefreshInterval { get; init; } = TimeSpan.FromSeconds(5);
+
+    public required EasyTierRuntimeOptions EasyTier { get; init; }
 
     public bool HasRole(RoleName role) => Roles.Contains(role);
 
@@ -43,14 +45,16 @@ public sealed class EtDiscoveryWebOptions
 
     public bool HasConfiguredVirtualIp => !string.IsNullOrWhiteSpace(ConfiguredVirtualIp);
 
-    public string? ConfiguredVirtualIp => NormalizeIpv4(Ipv4);
+    public string? ConfiguredVirtualIp => NormalizeIpv4(EasyTier.Ipv4);
 
-    public bool HasPeers => Peers.Count > 0;
+    public bool HasPeers => EasyTier.Peers.Count > 0;
+
+    public bool HasRegistryCandidates => RegistryCandidates.Count > 0;
 
     public bool RequiresPeerProvidedVirtualIp => !HasConfiguredVirtualIp;
 
     public bool ShouldEnableDhcp =>
-        IsWorker && RequiresPeerProvidedVirtualIp;
+        EasyTier.Dhcp ?? (IsWorker && RequiresPeerProvidedVirtualIp);
 
     public bool RequiresWindowsElevationForEasyTier =>
         RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
@@ -62,6 +66,15 @@ public sealed class EtDiscoveryWebOptions
     public bool HasPublishedServices => Services.Count > 0;
 
     public int ListenPort => new Uri(ListenUrl, UriKind.Absolute).Port;
+
+    /// <summary>
+    /// Role bits are always derived from <see cref="Roles"/> and never accepted from config.
+    /// </summary>
+    public (uint AppId, uint Flags) GetAdvertisedNodeTypeMetadata()
+    {
+        var nodeRoles = Roles.Select(RoleNameMapper.ToNodeRole);
+        return EtDiscoveryNodeTypeFlags.EncodeRoles(nodeRoles);
+    }
 
     public IReadOnlyList<string> GetPrivilegeChecklist()
     {
@@ -111,21 +124,17 @@ public sealed class EtDiscoveryWebOptions
             return new Uri(ListenUrl, UriKind.Absolute);
         }
 
-        var configuredPeer = !string.IsNullOrWhiteSpace(RegistryPeer)
-            ? RegistryPeer
-            : registryAddress;
-
-        if (string.IsNullOrWhiteSpace(configuredPeer))
+        if (string.IsNullOrWhiteSpace(registryAddress))
         {
             throw new InvalidOperationException("Registry endpoint is not configured.");
         }
 
-        if (Uri.TryCreate(configuredPeer, UriKind.Absolute, out var absoluteUri))
+        if (Uri.TryCreate(registryAddress, UriKind.Absolute, out var absoluteUri))
         {
             return absoluteUri;
         }
 
-        return new Uri($"http://{configuredPeer}:{ListenPort}", UriKind.Absolute);
+        return new Uri($"http://{registryAddress}:{DiscoveryPort}", UriKind.Absolute);
     }
 
     public static string? NormalizeIpv4(string? value)
@@ -170,6 +179,36 @@ public sealed class EtDiscoveryWebOptions
 
     [DllImport("libc")]
     private static extern uint geteuid();
+}
+
+/// <summary>
+/// EasyTier-native runtime options. Peers and underlay knobs live here, not under EtDiscovery.
+/// Node type flags are intentionally absent and always derived from roles.
+/// </summary>
+public sealed class EasyTierRuntimeOptions
+{
+    public required string CorePath { get; init; }
+
+    public required string CliPath { get; init; }
+
+    public required string InstanceName { get; init; }
+
+    public string? Ipv4 { get; init; }
+
+    public bool? Dhcp { get; init; }
+
+    public required IReadOnlyList<string> Peers { get; init; }
+
+    public string? Hostname { get; init; }
+
+    public IReadOnlyList<string> Listeners { get; init; } = [];
+
+    public string? ExternalNode { get; init; }
+
+    public IReadOnlyList<string> ProxyNetworks { get; init; } = [];
+
+    public IReadOnlyDictionary<string, string> Flags { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 }
 
 public sealed class PublishedServiceOptions

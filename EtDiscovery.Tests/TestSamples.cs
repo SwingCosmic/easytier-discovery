@@ -32,22 +32,30 @@ internal static class TestSamples
     public static EtDiscovery.Web.EtDiscoveryWebOptions WebOptions(
         IReadOnlyList<EtDiscovery.Web.RoleName>? roles = null,
         IReadOnlyList<EtDiscovery.Web.PublishedServiceOptions>? services = null,
-        string? ipv4 = "10.144.144.1")
+        string? ipv4 = "10.144.144.1",
+        IReadOnlyList<string>? registryCandidates = null,
+        IReadOnlyList<string>? peers = null,
+        bool autoDiscoverFromRouteMetadata = true)
     {
         return new EtDiscovery.Web.EtDiscoveryWebOptions
         {
             Roles = roles ?? [EtDiscovery.Web.RoleName.Registry],
-            EasyTierCorePath = "/usr/local/bin/easytier-core",
-            EasyTierCliPath = "/usr/local/bin/easytier-cli",
-            EasyTierInstanceName = "etdiscovery-demo-net",
             NetworkName = "demo-net",
             NetworkSecret = "demo-secret",
             VirtualNetworkCidr = EtDiscovery.Web.Ipv4Cidr.Parse("10.144.144.0/24"),
-            Ipv4 = ipv4,
-            ListenUrl = "http://127.0.0.1:8080",
-            Peers = ["tcp://127.0.0.1:11010"],
-            RegistryPeer = "10.144.144.1",
+            ListenUrl = "http://0.0.0.0:8080",
+            RegistryCandidates = registryCandidates ?? ["10.144.144.1"],
+            DiscoveryPort = 8080,
+            AutoDiscoverFromRouteMetadata = autoDiscoverFromRouteMetadata,
             Services = services ?? [],
+            EasyTier = new EtDiscovery.Web.EasyTierRuntimeOptions
+            {
+                CorePath = "/usr/local/bin/easytier-core",
+                CliPath = "/usr/local/bin/easytier-cli",
+                InstanceName = "etdiscovery-demo-net",
+                Ipv4 = ipv4,
+                Peers = peers ?? ["tcp://127.0.0.1:11010"],
+            },
         };
     }
 }

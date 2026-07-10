@@ -14,50 +14,38 @@
 - [08. EasyTier RoutePeerInfo Node Type Flags 主仓库草案](../../easytier/docs/route_peer_node_type_flags.md)
 - [09. EasyTier 仓库研究资料](../../easytier-research.md)
 
-## 当前结论
+## 当前结论（2026-07-11）
 
-- `etdiscovery/EtDiscovery.Web`、`etdiscovery/EtDiscovery.Core`、`etdiscovery/EtDiscovery.Tests` 已完成首轮最小 Web 原型落地。
+- `etdiscovery/EtDiscovery.Web`、`EtDiscovery.Core`、`EtDiscovery.Tests` 已完成最小 Web 原型，并完成 **registry 发现 + worker 注册** 联调。
 - Web 原型已验证以下闭环可用：
-  - 托管 `easytier-core`
-  - 通过 `easytier-cli` 读取真实 peer 状态
-  - 将 peer 状态映射为 `registry` 视角下的 discovery 候选
-  - worker 通过 HTTP 向 `registry` 主动注册/下线服务实例
-  - `registry + worker` 同机时可直接注册本机服务实例
-  - 提供 `/health`、`/easytier/peers`、`/test/ping`、`/discovery/services`、`/discovery/select`、`/discovery/instances`
-- API 路径已经统一去掉 `/api` 前缀。
-- 原型中的角色、接口、配置项均统一使用 `registry / worker / client`，不再使用 A/B/C 简写。
-- 启动输入中仅 `--roles` 必须通过命令行显式传入，其余参数统一从配置文件读取。
-- 服务发布配置已经从单服务字段切换为 `Services[]` 数组；`/discovery/services` 现在反映真实已注册实例，而不是固定拼装结果。
-- 当前原型对 discovery 数据采用“单份内存数据源 + 并发集合 + 瞬时快照读取”的设计：
-  - 内存里维护一份支持并发更新的注册/观测数据
-  - 所有查询接口都读取该数据源在某一时刻的快照视图
-  - 允许短时间内两次读取结果不同，不要求强一致
-- worker/client 定位 registry 已按 [Registry Bootstrap Discovery 设计草案](./service-registry-bootstrap-discovery.md) 收敛为：
-  - 配置拆分：`EtDiscovery` 与 `EasyTier`（`Peers` 只属于 EasyTier）
-  - 显式 `RegistryCandidates`（兼容旧 `RegistryPeer`）
-  - EasyTier `node_type_app_id` / `node_type_flags` 传递节点角色（不可配置覆盖，始终由 `--roles` 推导）
-  - 无相关元数据时远端 peer 默认视为 `worker`
-  - registry 元数据接口：`GET /discovery/registry`（与 `/discovery/*` 并列，不使用 `.well-known`）
-  - **不再**把首个可发现 peer VIP 当作 registry
+  - 托管 `easytier-core`（生成 TOML + `-c`，不再长命令行拼参）
+  - 通过 `easytier-cli` 读取 peer / route 元数据
+  - 用 `node_type_app_id` / `node_type_flags` 识别 registry 候选
+  - worker 通过 HTTP 向 registry 注册服务实例
+  - 提供 `/health`、`/easytier/peers`、`/test/ping`、`/discovery/registry`、`/discovery/services`、`/discovery/select`、`/discovery/instances`
+- 配置与发现规则：
+  - `EtDiscovery` / `EasyTier` 分节；`Peers` 只属于 EasyTier
+  - 角色元数据只由 `--roles` 推导，禁止配置覆盖
+  - 显式 `RegistryCandidates` + route metadata 发现；**不再**把首个 peer VIP 当 registry
+  - 无相关元数据时远端 peer 默认 `worker`
+  - registry 元数据：`GET /discovery/registry`（不用 `.well-known`）
+- 联调踩坑与修复已写入 [Registry Bootstrap Discovery](./service-registry-bootstrap-discovery.md) 的“当前实现状态”：
+  - 空 `Listeners` 必须生成默认 11010 监听
+  - verbose `peer list` JSON 不能把 `ipv4_addr.address` 当 string
+  - registry `ListenUrl` 禁止只绑 `127.0.0.1`
 
 ## 当前注意事项
 
+- **registry `ListenUrl` 必须对虚拟网可达**：推荐 `http://0.0.0.0:8080`，不要用 `http://127.0.0.1:8080`。
 - Windows 上如果节点需要本机虚拟 IP，则通常需要管理员权限。
-  - `registry` 需要管理员权限。
-  - `worker` 使用静态 `Ipv4` 时需要管理员权限。
-  - `worker` 使用 `--dhcp` 自动获取虚拟 IP 时也需要管理员权限。
+  - `registry` / 静态 `Ipv4` / DHCP 都需要。
 - Windows 上为了自动弹出 UAC，`EtDiscovery.Web` 已嵌入 `app.manifest`。
-  - 只有启动生成出来的 `EtDiscovery.Web.exe` 才会应用该 manifest。
-  - 如果使用 `dotnet EtDiscovery.Web.dll` 启动，不会自动提权。
-- Linux 上如果节点需要本机虚拟 IP，则必须保证 TUN 可用。
-  - 通常需要 `root` 或等效权限。
-  - 必须可访问 `/dev/net/tun`。
-  - 必要时需要先加载 `tun` 模块。
-- `worker + --dhcp` 在 EasyTier 中表示“worker 自己启用自动地址分配逻辑”，不是“registry 显式充当 DHCP 服务器并主动下发 IP”。
-- 当前原型最稳妥的验证路径仍然是：
-  - `registry` 显式指定固定虚拟 IP
-  - `worker` 先尝试 `--dhcp`
-  - 若现场环境下 DHCP 不稳定，则直接显式指定 `worker` 的虚拟 IP
+  - 只有 `EtDiscovery.Web.exe` 会应用；`dotnet xxx.dll` 不会提权。
+- Linux 上如果节点需要本机虚拟 IP，则必须保证 TUN 可用（root/`/dev/net/tun`）。
+- `worker + dhcp` 表示 EasyTier 自动分配虚拟 IP，不是“registry 当传统 DHCP 服务器”。
+- 当前较稳妥验证路径：
+  - `registry` 固定 `EasyTier.Ipv4` + `ListenUrl=0.0.0.0:8080`
+  - `worker` 先 DHCP；不稳则写死 worker VIP
 
 ## 推荐验证方式
 

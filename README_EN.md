@@ -76,22 +76,26 @@ This project is currently a prototype intended for design validation and early i
 
 What is already working:
 
-- EasyTier process hosting from a .NET web app
-- reading real EasyTier node and peer state via `easytier-cli`
+- EasyTier process hosting from a .NET web app (generated TOML + `easytier-core -c`)
+- reading real EasyTier node/peer/route metadata via `easytier-cli`
 - mapping peer observations into discovery candidates
 - an in-memory registry for registered service instances
 - worker-to-registry HTTP registration
-- auto-fallback from explicit `RegistryPeer` to the first remote discoverable peer's virtual IP
+- registry location via explicit `RegistryCandidates` and EasyTier `node_type_*` route metadata
+- no more fallback that treats the first discoverable remote peer VIP as the registry
+- simplified registry metadata at `GET /discovery/registry`
 - `registry`-side `/discovery/services` and `/discovery/select`
 - `worker`-side self-registration based on `Services[]`
+- config split between `EtDiscovery` and `EasyTier`; role bits cannot be overridden by app config
 - a concurrency model based on one shared in-memory data source with concurrent updates and point-in-time snapshot reads
+- registry↔worker integration validated; fixes applied for default listeners, verbose peer JSON parsing, and registry `ListenUrl` binding
 
 ## Current Assumptions
 
 The current prototype assumes:
 
-- most remote peers are registry peers
-- relay-only or transit-only nodes are not modeled yet
+- registries must be identified by explicit config or EtDiscovery role metadata; plain peers default to worker
+- registry HTTP must bind an address reachable on the virtual network (prefer `0.0.0.0`, not `127.0.0.1`)
 - service discovery data is eventually consistent
 - short-lived inconsistency between node state and instance state is acceptable
 
@@ -174,8 +178,11 @@ Use a config file under `EtDiscovery.Web/` or a published output directory.
 Registry-specific notes:
 
 - use `roles=registry`
-- set a fixed `Ipv4`
+- **set `EtDiscovery:ListenUrl` to `http://0.0.0.0:8080`** (not `127.0.0.1`, or workers cannot reach the virtual IP)
+- set a fixed virtual IP under `EasyTier.Ipv4`
+- leave `EasyTier.Listeners` empty to get default 11010 listeners in the generated TOML
 - `Services[]` can be empty if the registry is not also a worker
+- role bits are auto-written into EasyTier `node_type_*` metadata and cannot be overridden by app config
 
 ### 3. Configure a Worker
 
@@ -183,10 +190,12 @@ Worker-specific notes:
 
 - use `roles=worker`
 - define one or more `Services[]`
-- optionally set `RegistryPeer`
-- if `RegistryPeer` is empty, the worker currently falls back to the first remote discoverable peer's virtual IP
+- optionally set `EtDiscovery.RegistryCandidates` (or legacy `RegistryPeer`)
+- if no explicit candidate is set, the worker tries route-metadata peers marked as registry
+- put underlay `Peers` only under `EasyTier` (join seed, not registry list)
+- worker `ListenUrl` may stay loopback-only; registry must not
 
-Example worker service config:
+Example registry config:
 
 ```json
 {
@@ -194,16 +203,45 @@ Example worker service config:
     "NetworkName": "etd-test",
     "NetworkSecret": "test-secret123!",
     "VirtualNetworkCidr": "10.1.1.0/24",
-    "ListenUrl": "http://127.0.0.1:8080",
-    "Peers": ["tcp://bootstrap.example.com:11010"],
-    "RegistryPeer": "",
+    "ListenUrl": "http://0.0.0.0:8080",
+    "DiscoveryPort": 8080,
+    "Services": []
+  },
+  "EasyTier": {
+    "CorePath": "easytier-core",
+    "InstanceName": "registry-a",
+    "Ipv4": "10.1.1.1",
+    "Peers": []
+  }
+}
+```
+
+Example worker config:
+
+```json
+{
+  "EtDiscovery": {
+    "NetworkName": "etd-test",
+    "NetworkSecret": "test-secret123!",
+    "VirtualNetworkCidr": "10.1.1.0/24",
+    "ListenUrl": "http://127.0.0.1:8081",
+    "RegistryCandidates": [],
+    "AutoDiscoverFromRouteMetadata": true,
+    "DiscoveryPort": 8080,
     "Services": [
       {
         "ServiceName": "test",
-        "Port": 8080,
+        "Port": 8081,
         "Protocol": "http"
       }
     ]
+  },
+  "EasyTier": {
+    "CorePath": "easytier-core",
+    "InstanceName": "worker-a",
+    "Peers": ["tcp://bootstrap.example.com:11010"],
+    "Ipv4": "",
+    "Dhcp": true
   }
 }
 ```

@@ -28,6 +28,18 @@ public sealed class EasyTierObservationService
         var nodeInfo = await _cliClient.GetNodeInfoAsync(cancellationToken)
             ?? throw new InvalidOperationException("Failed to read local EasyTier node info.");
         var peers = await _cliClient.GetPeerListAsync(cancellationToken);
+
+        IReadOnlyList<EasyTierPeerRoutePair> routePairs;
+        try
+        {
+            routePairs = await _cliClient.GetPeerRoutePairsVerboseAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query verbose peer routes from easytier-cli. Continuing without node_type metadata.");
+            routePairs = [];
+        }
+
         Dictionary<string, ForeignNetworkEntry> foreignNetworks;
         try
         {
@@ -39,7 +51,7 @@ public sealed class EasyTierObservationService
             foreignNetworks = new Dictionary<string, ForeignNetworkEntry>(StringComparer.Ordinal);
         }
 
-        var snapshot = _mapper.Map(_options, nodeInfo, peers, foreignNetworks);
+        var snapshot = _mapper.Map(_options, nodeInfo, peers, routePairs, foreignNetworks);
         LogSnapshotChanges(snapshot);
         Volatile.Write(ref _lastSnapshot, snapshot);
 
@@ -58,11 +70,12 @@ public sealed class EasyTierObservationService
         if (previousSnapshot is null)
         {
             _logger.LogInformation(
-                "EasyTier snapshot initialized. localNodeId={NodeId} localVirtualIp={VirtualIp} peers={PeerCount} eligiblePeers={EligiblePeerCount}",
+                "EasyTier snapshot initialized. localNodeId={NodeId} localVirtualIp={VirtualIp} peers={PeerCount} eligiblePeers={EligiblePeerCount} registryCandidates={RegistryCandidateCount}",
                 currentSnapshot.LocalNode.NodeId,
                 DisplayValue(currentSnapshot.LocalNode.VirtualIp),
                 currentSnapshot.Peers.Count,
-                currentSnapshot.Peers.Count(peer => peer.EligibleForDiscovery));
+                currentSnapshot.Peers.Count(peer => peer.EligibleForDiscovery),
+                currentSnapshot.Peers.Count(peer => peer.IsRegistryCandidate));
         }
         else if (!string.Equals(previousSnapshot.LocalNode.VirtualIp, currentSnapshot.LocalNode.VirtualIp, StringComparison.OrdinalIgnoreCase))
         {
@@ -81,21 +94,23 @@ public sealed class EasyTierObservationService
             if (!previousPeers.TryGetValue(peer.NodeId, out var previousPeer))
             {
                 _logger.LogInformation(
-                    "EasyTier peer discovered. nodeId={NodeId} hostname={Hostname} peerId={PeerId} isLocal={IsLocal} networkName={NetworkName} virtualIp={VirtualIp} eligibleForDiscovery={EligibleForDiscovery}",
+                    "EasyTier peer discovered. nodeId={NodeId} hostname={Hostname} peerId={PeerId} isLocal={IsLocal} networkName={NetworkName} virtualIp={VirtualIp} eligibleForDiscovery={EligibleForDiscovery} roles={Roles} registryCandidate={RegistryCandidate}",
                     peer.NodeId,
                     peer.Hostname ?? "<unknown>",
                     peer.PeerId,
                     peer.IsLocal,
                     peer.NetworkName,
                     DisplayValue(peer.VirtualIp),
-                    peer.EligibleForDiscovery);
+                    peer.EligibleForDiscovery,
+                    string.Join(',', peer.Roles.Select(role => role.ToString().ToLowerInvariant())),
+                    peer.IsRegistryCandidate);
                 continue;
             }
 
             if (HasMeaningfulChange(previousPeer, peer))
             {
                 _logger.LogInformation(
-                    "EasyTier peer changed. nodeId={NodeId} hostname={Hostname} networkName={PreviousNetworkName}->{CurrentNetworkName} virtualIp={PreviousVirtualIp}->{CurrentVirtualIp} sameNetwork={PreviousSameNetwork}->{CurrentSameNetwork} inVirtualNetworkCidr={PreviousInVirtualNetworkCidr}->{CurrentInVirtualNetworkCidr} eligibleForDiscovery={PreviousEligibleForDiscovery}->{CurrentEligibleForDiscovery} cost={PreviousCost}->{CurrentCost}",
+                    "EasyTier peer changed. nodeId={NodeId} hostname={Hostname} networkName={PreviousNetworkName}->{CurrentNetworkName} virtualIp={PreviousVirtualIp}->{CurrentVirtualIp} sameNetwork={PreviousSameNetwork}->{CurrentSameNetwork} inVirtualNetworkCidr={PreviousInVirtualNetworkCidr}->{CurrentInVirtualNetworkCidr} eligibleForDiscovery={PreviousEligibleForDiscovery}->{CurrentEligibleForDiscovery} roles={PreviousRoles}->{CurrentRoles} cost={PreviousCost}->{CurrentCost}",
                     peer.NodeId,
                     peer.Hostname ?? "<unknown>",
                     previousPeer.NetworkName,
@@ -108,6 +123,8 @@ public sealed class EasyTierObservationService
                     peer.InVirtualNetworkCidr,
                     previousPeer.EligibleForDiscovery,
                     peer.EligibleForDiscovery,
+                    string.Join(',', previousPeer.Roles.Select(role => role.ToString().ToLowerInvariant())),
+                    string.Join(',', peer.Roles.Select(role => role.ToString().ToLowerInvariant())),
                     DisplayValue(previousPeer.Cost),
                     DisplayValue(peer.Cost));
             }
@@ -129,11 +146,12 @@ public sealed class EasyTierObservationService
         }
 
         _logger.LogDebug(
-            "EasyTier snapshot refreshed. localVirtualIp={LocalVirtualIp} peers={PeerCount} sameNetworkPeers={SameNetworkPeerCount} eligiblePeers={EligiblePeerCount}",
+            "EasyTier snapshot refreshed. localVirtualIp={LocalVirtualIp} peers={PeerCount} sameNetworkPeers={SameNetworkPeerCount} eligiblePeers={EligiblePeerCount} registryCandidates={RegistryCandidateCount}",
             DisplayValue(currentSnapshot.LocalNode.VirtualIp),
             currentSnapshot.Peers.Count,
             currentSnapshot.Peers.Count(peer => peer.SameNetwork),
-            currentSnapshot.Peers.Count(peer => peer.EligibleForDiscovery));
+            currentSnapshot.Peers.Count(peer => peer.EligibleForDiscovery),
+            currentSnapshot.Peers.Count(peer => peer.IsRegistryCandidate));
     }
 
     private static bool HasMeaningfulChange(ObservedPeer previousPeer, ObservedPeer currentPeer) =>
@@ -142,6 +160,9 @@ public sealed class EasyTierObservationService
         previousPeer.SameNetwork != currentPeer.SameNetwork ||
         previousPeer.InVirtualNetworkCidr != currentPeer.InVirtualNetworkCidr ||
         previousPeer.EligibleForDiscovery != currentPeer.EligibleForDiscovery ||
+        previousPeer.NodeTypeFlags != currentPeer.NodeTypeFlags ||
+        previousPeer.NodeTypeAppId != currentPeer.NodeTypeAppId ||
+        !previousPeer.Roles.SequenceEqual(currentPeer.Roles) ||
         !string.Equals(previousPeer.Cost, currentPeer.Cost, StringComparison.OrdinalIgnoreCase);
 
     private static string DisplayValue(string? value) =>

@@ -34,7 +34,7 @@ public sealed class EasyTierVirtualIpMonitor : IHostedService
         _logger.LogInformation(
             "Waiting for peer-provided EasyTier virtual IP. roles={Roles} peers={PeerCount} dhcpEnabled={DhcpEnabled} timeoutSeconds={TimeoutSeconds}",
             string.Join(",", _options.Roles.Select(role => role.ToString().ToLowerInvariant())),
-            _options.Peers.Count,
+            _options.EasyTier.Peers.Count,
             _options.ShouldEnableDhcp,
             (int)StartupTimeout.TotalSeconds);
 
@@ -67,7 +67,9 @@ public sealed class EasyTierVirtualIpMonitor : IHostedService
         }
 
         throw new InvalidOperationException(
-            $"No EasyTier virtual IP was acquired within {(int)StartupTimeout.TotalSeconds} seconds. Configure EtDiscovery:Ipv4 explicitly or ensure a peer provides DHCP.",
+            $"No EasyTier virtual IP was acquired within {(int)StartupTimeout.TotalSeconds} seconds. " +
+            "Configure EasyTier:Ipv4 explicitly, ensure EasyTier:Peers can connect to the registry " +
+            "(registry must listen on the advertised peer port), or verify DHCP on a joined network.",
             lastError);
     }
 

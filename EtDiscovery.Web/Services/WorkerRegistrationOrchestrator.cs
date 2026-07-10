@@ -8,6 +8,7 @@ public sealed class WorkerRegistrationOrchestrator
 {
     private readonly EtDiscoveryWebOptions _options;
     private readonly DiscoveryInstanceRegistry _instanceRegistry;
+    private readonly RegistryLocator _registryLocator;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<WorkerRegistrationOrchestrator> _logger;
     private readonly HashSet<string> _registeredInstanceIds = [];
@@ -15,11 +16,13 @@ public sealed class WorkerRegistrationOrchestrator
     public WorkerRegistrationOrchestrator(
         EtDiscoveryWebOptions options,
         DiscoveryInstanceRegistry instanceRegistry,
+        RegistryLocator registryLocator,
         IHttpClientFactory httpClientFactory,
         ILogger<WorkerRegistrationOrchestrator> logger)
     {
         _options = options;
         _instanceRegistry = instanceRegistry;
+        _registryLocator = registryLocator;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
@@ -38,7 +41,14 @@ public sealed class WorkerRegistrationOrchestrator
         }
 
         var requests = BuildRequests(snapshot.LocalNode);
-        var registryAddress = ResolveRegistryAddress(snapshot);
+        var registry = await _registryLocator.ResolveAsync(snapshot, cancellationToken);
+        if (!_options.IsRegistry && registry is null)
+        {
+            _logger.LogWarning(
+                "Skipping worker registration because no registry candidate was resolved. reason=registry_candidate_missing");
+            return;
+        }
+
         foreach (var request in requests)
         {
             if (_options.IsRegistry)
@@ -47,7 +57,7 @@ public sealed class WorkerRegistrationOrchestrator
             }
             else
             {
-                await RegisterRemoteAsync(request, registryAddress, cancellationToken);
+                await RegisterRemoteAsync(request, registry!.Address, cancellationToken);
             }
 
             _registeredInstanceIds.Add(request.Instance.InstanceId);
@@ -61,15 +71,16 @@ public sealed class WorkerRegistrationOrchestrator
             return;
         }
 
+        var registry = _registryLocator.GetLastResolved();
         foreach (var instanceId in _registeredInstanceIds.ToArray())
         {
             if (_options.IsRegistry)
             {
                 _instanceRegistry.Deregister(instanceId);
             }
-            else
+            else if (registry is not null)
             {
-                await DeregisterRemoteAsync(instanceId, _options.RegistryPeer, cancellationToken);
+                await DeregisterRemoteAsync(instanceId, registry.Address, cancellationToken);
             }
         }
 
@@ -124,19 +135,7 @@ public sealed class WorkerRegistrationOrchestrator
         return new RegisterServiceRequest(definition, instance);
     }
 
-    private string? ResolveRegistryAddress(EasyTierObservationSnapshot snapshot)
-    {
-        if (!string.IsNullOrWhiteSpace(_options.RegistryPeer))
-        {
-            return _options.RegistryPeer;
-        }
-
-        return snapshot.Peers
-            .FirstOrDefault(peer => !peer.IsLocal && peer.EligibleForDiscovery && !string.IsNullOrWhiteSpace(peer.VirtualIp))
-            ?.VirtualIp;
-    }
-
-    private async Task RegisterRemoteAsync(RegisterServiceRequest request, string? registryAddress, CancellationToken cancellationToken)
+    private async Task RegisterRemoteAsync(RegisterServiceRequest request, string registryAddress, CancellationToken cancellationToken)
     {
         using var client = _httpClientFactory.CreateClient(nameof(WorkerRegistrationOrchestrator));
         var endpoint = new Uri(_options.GetRegistryBaseUri(registryAddress), "/discovery/instances");
@@ -144,7 +143,7 @@ public sealed class WorkerRegistrationOrchestrator
         response.EnsureSuccessStatusCode();
     }
 
-    private async Task DeregisterRemoteAsync(string instanceId, string? registryAddress, CancellationToken cancellationToken)
+    private async Task DeregisterRemoteAsync(string instanceId, string registryAddress, CancellationToken cancellationToken)
     {
         using var client = _httpClientFactory.CreateClient(nameof(WorkerRegistrationOrchestrator));
         var endpoint = new Uri(_options.GetRegistryBaseUri(registryAddress), $"/discovery/instances/{Uri.EscapeDataString(instanceId)}");

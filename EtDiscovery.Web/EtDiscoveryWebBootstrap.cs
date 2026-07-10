@@ -23,8 +23,12 @@ public static class EtDiscoveryWebBootstrap
             .GetSection(EtDiscoveryConfiguration.SectionName)
             .Get<EtDiscoveryConfiguration>()
             ?? new EtDiscoveryConfiguration();
+        var easyTierSettings = builder.Configuration
+            .GetSection(EasyTierConfiguration.SectionName)
+            .Get<EasyTierConfiguration>()
+            ?? new EasyTierConfiguration();
 
-        return settings.BuildOptions(roles);
+        return settings.BuildOptions(roles, easyTierSettings);
     }
 
     private static IReadOnlyList<RoleName> ParseRolesFromArgs(string? rolesValue)
@@ -61,57 +65,96 @@ public sealed class EtDiscoveryConfiguration
 {
     public const string SectionName = "EtDiscovery";
 
-    public string? EasyTierCorePath { get; set; }
-
-    public string? EasyTierCliPath { get; set; }
-
     public string? NetworkName { get; set; }
-
-    public string? EasyTierInstanceName { get; set; }
 
     public string? NetworkSecret { get; set; }
 
     public string? VirtualNetworkCidr { get; set; }
 
-    public string? Ipv4 { get; set; }
-
     public string? ListenUrl { get; set; }
 
-    public List<string> Peers { get; set; } = [];
+    public List<string> RegistryCandidates { get; set; } = [];
 
+    /// <summary>
+    /// Compatibility alias that is folded into <see cref="RegistryCandidates"/>.
+    /// </summary>
     public string? RegistryPeer { get; set; }
+
+    public int? DiscoveryPort { get; set; }
+
+    public bool? AutoDiscoverFromRouteMetadata { get; set; }
 
     public List<PublishedServiceConfiguration> Services { get; set; } = [];
 
     public int? RefreshIntervalSeconds { get; set; }
 
-    public EtDiscoveryWebOptions BuildOptions(IReadOnlyList<RoleName> roles)
+    public EtDiscoveryWebOptions BuildOptions(IReadOnlyList<RoleName> roles, EasyTierConfiguration easyTierSettings)
     {
-        var corePath = NormalizeBinaryPath(Require(NormalizeConfiguredPath(EasyTierCorePath), "EtDiscovery:EasyTierCorePath"));
-        var cliPath = NormalizeBinaryPath(NormalizeConfiguredPath(EasyTierCliPath) ?? InferCliPath(corePath));
+        var corePath = NormalizeBinaryPath(Require(NormalizeConfiguredPath(easyTierSettings.CorePath), "EasyTier:CorePath"));
+        var cliPath = NormalizeBinaryPath(NormalizeConfiguredPath(easyTierSettings.CliPath) ?? InferCliPath(corePath));
+        var networkName = Require(NullIfWhiteSpace(NetworkName), "EtDiscovery:NetworkName");
+        var listenUrl = Require(NullIfWhiteSpace(ListenUrl), "EtDiscovery:ListenUrl");
+        var listenPort = new Uri(listenUrl, UriKind.Absolute).Port;
 
         var options = new EtDiscoveryWebOptions
         {
             Roles = roles,
-            EasyTierCorePath = corePath,
-            EasyTierCliPath = cliPath,
-            EasyTierInstanceName = NullIfWhiteSpace(EasyTierInstanceName)
-                ?? $"etdiscovery-{Require(NullIfWhiteSpace(NetworkName), "EtDiscovery:NetworkName")}",
-            NetworkName = Require(NullIfWhiteSpace(NetworkName), "EtDiscovery:NetworkName"),
+            NetworkName = networkName,
             NetworkSecret = Require(NullIfWhiteSpace(NetworkSecret), "EtDiscovery:NetworkSecret"),
             VirtualNetworkCidr = Ipv4Cidr.Parse(Require(NullIfWhiteSpace(VirtualNetworkCidr), "EtDiscovery:VirtualNetworkCidr")),
-            Ipv4 = NullIfWhiteSpace(Ipv4),
-            ListenUrl = Require(NullIfWhiteSpace(ListenUrl), "EtDiscovery:ListenUrl"),
-            Peers = Peers
-                .Where(static peer => !string.IsNullOrWhiteSpace(peer))
-                .ToArray(),
-            RegistryPeer = NormalizeRegistryPeer(NullIfWhiteSpace(RegistryPeer)),
+            ListenUrl = listenUrl,
+            RegistryCandidates = BuildRegistryCandidates(RegistryCandidates, RegistryPeer),
+            DiscoveryPort = DiscoveryPort.GetValueOrDefault(listenPort),
+            AutoDiscoverFromRouteMetadata = AutoDiscoverFromRouteMetadata.GetValueOrDefault(true),
             Services = Services.Select(MapService).ToArray(),
             RefreshInterval = TimeSpan.FromSeconds(RefreshIntervalSeconds.GetValueOrDefault(5)),
+            EasyTier = new EasyTierRuntimeOptions
+            {
+                CorePath = corePath,
+                CliPath = cliPath,
+                InstanceName = NullIfWhiteSpace(easyTierSettings.InstanceName)
+                    ?? $"etdiscovery-{networkName}",
+                Ipv4 = NullIfWhiteSpace(easyTierSettings.Ipv4),
+                Dhcp = easyTierSettings.Dhcp,
+                Peers = easyTierSettings.Peers
+                    .Where(static peer => !string.IsNullOrWhiteSpace(peer))
+                    .ToArray(),
+                Hostname = NullIfWhiteSpace(easyTierSettings.Hostname),
+                Listeners = easyTierSettings.Listeners
+                    .Where(static listener => !string.IsNullOrWhiteSpace(listener))
+                    .ToArray(),
+                ExternalNode = NullIfWhiteSpace(easyTierSettings.ExternalNode),
+                ProxyNetworks = easyTierSettings.ProxyNetworks
+                    .Where(static network => !string.IsNullOrWhiteSpace(network))
+                    .ToArray(),
+                Flags = easyTierSettings.Flags?.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal)
+                    ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            },
         };
 
         Validate(options);
         return options;
+    }
+
+    private static IReadOnlyList<string> BuildRegistryCandidates(IEnumerable<string> candidates, string? registryPeer)
+    {
+        var result = new List<string>();
+        foreach (var candidate in candidates)
+        {
+            var normalized = NormalizeRegistryEndpoint(candidate);
+            if (normalized is not null && !result.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+            {
+                result.Add(normalized);
+            }
+        }
+
+        var legacy = NormalizeRegistryEndpoint(registryPeer);
+        if (legacy is not null && !result.Contains(legacy, StringComparer.OrdinalIgnoreCase))
+        {
+            result.Add(legacy);
+        }
+
+        return result;
     }
 
     private static PublishedServiceOptions MapService(PublishedServiceConfiguration service)
@@ -134,14 +177,19 @@ public sealed class EtDiscoveryConfiguration
 
     private static void Validate(EtDiscoveryWebOptions options)
     {
-        if (string.IsNullOrWhiteSpace(options.EasyTierCorePath))
+        if (string.IsNullOrWhiteSpace(options.EasyTier.CorePath))
         {
-            throw new ArgumentException("EtDiscovery:EasyTierCorePath is required.");
+            throw new ArgumentException("EasyTier:CorePath is required.");
         }
 
-        if (string.IsNullOrWhiteSpace(options.EasyTierCliPath))
+        if (string.IsNullOrWhiteSpace(options.EasyTier.CliPath))
         {
-            throw new ArgumentException("EtDiscovery:EasyTierCliPath is required or must be inferrable from EasyTierCorePath.");
+            throw new ArgumentException("EasyTier:CliPath is required or must be inferrable from EasyTier:CorePath.");
+        }
+
+        if (options.DiscoveryPort is < 1 or > 65535)
+        {
+            throw new ArgumentException("EtDiscovery:DiscoveryPort must be between 1 and 65535.");
         }
 
         if (options.IsWorker)
@@ -152,15 +200,16 @@ public sealed class EtDiscoveryConfiguration
             }
 
             if (!options.IsRegistry &&
-                !options.HasPeers &&
-                string.IsNullOrWhiteSpace(options.RegistryPeer))
+                !options.HasRegistryCandidates &&
+                !options.AutoDiscoverFromRouteMetadata)
             {
-                throw new ArgumentException("Worker requires EtDiscovery:RegistryPeer or at least one EtDiscovery:Peers entry when registry role is absent.");
+                throw new ArgumentException(
+                    "Worker requires EtDiscovery:RegistryCandidates (or RegistryPeer) or AutoDiscoverFromRouteMetadata=true when registry role is absent.");
             }
 
             if (options.RequiresPeerProvidedVirtualIp && !options.HasPeers)
             {
-                throw new ArgumentException("Worker requires EtDiscovery:Ipv4 when no EtDiscovery:Peers are configured.");
+                throw new ArgumentException("Worker requires EasyTier:Ipv4 when no EasyTier:Peers are configured.");
             }
         }
 
@@ -168,12 +217,20 @@ public sealed class EtDiscoveryConfiguration
             options.RequiresPeerProvidedVirtualIp &&
             !options.HasPeers)
         {
-            throw new ArgumentException("Registry requires EtDiscovery:Ipv4 when no EtDiscovery:Peers are configured.");
+            throw new ArgumentException("Registry requires EasyTier:Ipv4 when no EasyTier:Peers are configured.");
         }
 
         if (options.HasConfiguredVirtualIp && !options.VirtualNetworkCidr.Contains(options.ConfiguredVirtualIp))
         {
-            throw new ArgumentException("EtDiscovery:Ipv4 must belong to EtDiscovery:VirtualNetworkCidr.");
+            throw new ArgumentException("EasyTier:Ipv4 must belong to EtDiscovery:VirtualNetworkCidr.");
+        }
+
+        if (options.IsRegistry && IsLoopbackListenUrl(options.ListenUrl))
+        {
+            throw new ArgumentException(
+                "Registry EtDiscovery:ListenUrl must not bind only to loopback (127.0.0.1/localhost). " +
+                "Workers reach the registry via the EasyTier virtual IP (e.g. http://10.x.x.x:8080). " +
+                "Use http://0.0.0.0:8080 (or the virtual IP) so Kestrel accepts overlay traffic.");
         }
 
         var duplicateInstanceId = options.Services
@@ -230,7 +287,7 @@ public sealed class EtDiscoveryConfiguration
         return string.IsNullOrWhiteSpace(fileName) ? null : normalized;
     }
 
-    private static string? NormalizeRegistryPeer(string? value)
+    private static string? NormalizeRegistryEndpoint(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -241,6 +298,45 @@ public sealed class EtDiscoveryConfiguration
             ? value
             : EtDiscoveryWebOptions.NormalizeIpv4(value);
     }
+
+    private static bool IsLoopbackListenUrl(string listenUrl)
+    {
+        if (!Uri.TryCreate(listenUrl, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        return uri.IsLoopback ||
+               string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(uri.Host, "::1", StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+public sealed class EasyTierConfiguration
+{
+    public const string SectionName = "EasyTier";
+
+    public string? CorePath { get; set; }
+
+    public string? CliPath { get; set; }
+
+    public string? InstanceName { get; set; }
+
+    public string? Ipv4 { get; set; }
+
+    public bool? Dhcp { get; set; }
+
+    public List<string> Peers { get; set; } = [];
+
+    public string? Hostname { get; set; }
+
+    public List<string> Listeners { get; set; } = [];
+
+    public string? ExternalNode { get; set; }
+
+    public List<string> ProxyNetworks { get; set; } = [];
+
+    public Dictionary<string, string>? Flags { get; set; }
 }
 
 public sealed class PublishedServiceConfiguration

@@ -23,6 +23,12 @@ public sealed class LocalNodeView
     public string? Hostname { get; init; }
 
     public uint? PeerId { get; init; }
+
+    public uint? NodeTypeAppId { get; init; }
+
+    public uint NodeTypeFlags { get; init; }
+
+    public IReadOnlyList<NodeRole> Roles { get; init; } = [NodeRole.Worker];
 }
 
 public sealed class ObservedPeer
@@ -51,7 +57,14 @@ public sealed class ObservedPeer
 
     public string? Cost { get; init; }
 
+    public uint? NodeTypeAppId { get; init; }
+
+    public uint NodeTypeFlags { get; init; }
+
     public IReadOnlyList<NodeRole> Roles { get; init; } = [NodeRole.Worker];
+
+    public bool IsRegistryCandidate =>
+        EtDiscoveryNodeTypeFlags.IsRegistryCandidate(NodeTypeAppId, NodeTypeFlags);
 }
 
 public sealed class EasyTierPeerListItem
@@ -85,6 +98,38 @@ public sealed class EasyTierNodeInfo
 
     [JsonPropertyName("config")]
     public string? Config { get; init; }
+
+    [JsonPropertyName("node_type_flags")]
+    public uint? NodeTypeFlags { get; init; }
+
+    [JsonPropertyName("node_type_app_id")]
+    public uint? NodeTypeAppId { get; init; }
+}
+
+/// <summary>
+/// Subset of EasyTier verbose <c>peer list -v</c> / route payload needed for role discovery.
+/// Intentionally omits nested address objects (e.g. ipv4_addr.address.addr as u32) that we
+/// do not need; VIP still comes from non-verbose peer list projection.
+/// </summary>
+public sealed class EasyTierPeerRoutePair
+{
+    [JsonPropertyName("route")]
+    public EasyTierRouteInfo? Route { get; init; }
+}
+
+public sealed class EasyTierRouteInfo
+{
+    [JsonPropertyName("peer_id")]
+    public uint PeerId { get; init; }
+
+    [JsonPropertyName("hostname")]
+    public string? Hostname { get; init; }
+
+    [JsonPropertyName("node_type_flags")]
+    public uint? NodeTypeFlags { get; init; }
+
+    [JsonPropertyName("node_type_app_id")]
+    public uint? NodeTypeAppId { get; init; }
 }
 
 public sealed class ForeignNetworkEntry
@@ -97,6 +142,48 @@ public sealed class ForeignNetworkPeer
 {
     [JsonPropertyName("peer_id")]
     public uint PeerId { get; init; }
+}
+
+public sealed class RegistryEndpoint
+{
+    public required string Address { get; init; }
+
+    public required string Source { get; init; }
+
+    public string? NodeId { get; init; }
+
+    public string? VirtualIp { get; init; }
+}
+
+public sealed class RegistryMetadataResponse
+{
+    public string Protocol { get; init; } = "etdiscovery";
+
+    public string ProtocolVersion { get; init; } = "0.1";
+
+    public required string NetworkName { get; init; }
+
+    public required string NodeId { get; init; }
+
+    public string? VirtualIp { get; init; }
+
+    public required IReadOnlyList<string> Roles { get; init; }
+
+    public required RegistryEndpoints Endpoints { get; init; }
+
+    public required RegistryCapabilities Capabilities { get; init; }
+}
+
+public sealed class RegistryEndpoints
+{
+    public required string Http { get; init; }
+}
+
+public sealed class RegistryCapabilities
+{
+    public bool ServiceRegistration { get; init; } = true;
+
+    public bool ServiceResolve { get; init; } = true;
 }
 
 public sealed record ForeignPeerMembership(uint PeerId, string NetworkName);

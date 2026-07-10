@@ -1,3 +1,4 @@
+using EtDiscovery.Core.Models;
 using EtDiscovery.Web;
 using EtDiscovery.Web.Models;
 using EtDiscovery.Web.Services;
@@ -47,6 +48,7 @@ public class PeerObservationMapperTests
                     Id = "3",
                 },
             ],
+            [],
             new Dictionary<string, ForeignNetworkEntry>(StringComparer.Ordinal)
             {
                 ["foreign-net"] = new ForeignNetworkEntry
@@ -61,6 +63,7 @@ public class PeerObservationMapperTests
         Assert.That(sameNetworkPeer.SameNetwork, Is.True);
         Assert.That(sameNetworkPeer.InVirtualNetworkCidr, Is.True);
         Assert.That(sameNetworkPeer.EligibleForDiscovery, Is.True);
+        Assert.That(sameNetworkPeer.Roles, Is.EqualTo(new[] { NodeRole.Worker }));
 
         Assert.That(foreignPeer.SameNetwork, Is.False);
         Assert.That(foreignPeer.NetworkName, Is.EqualTo("foreign-net"));
@@ -91,6 +94,7 @@ public class PeerObservationMapperTests
                     Id = "2",
                 },
             ],
+            [],
             new Dictionary<string, ForeignNetworkEntry>(StringComparer.Ordinal));
 
         var peer = snapshot.Peers.Single();
@@ -123,11 +127,87 @@ public class PeerObservationMapperTests
                     Id = "1",
                 },
             ],
+            [],
             new Dictionary<string, ForeignNetworkEntry>(StringComparer.Ordinal));
 
         Assert.That(snapshot.LocalNode.VirtualIp, Is.EqualTo("10.144.144.9"));
         Assert.That(snapshot.Peers.Single().VirtualIp, Is.EqualTo("10.144.144.9"));
         Assert.That(snapshot.Peers.Single().EligibleForDiscovery, Is.True);
+    }
+
+    [Test]
+    public void DecodesRegistryRoleFromRouteMetadata()
+    {
+        var options = CreateOptions();
+        var mapper = new PeerObservationMapper();
+
+        var snapshot = mapper.Map(
+            options,
+            new EasyTierNodeInfo
+            {
+                PeerId = 1U,
+                Hostname = "worker",
+                Ipv4Addr = "10.144.144.2/24",
+            },
+            [
+                new EasyTierPeerListItem
+                {
+                    Cidr = "10.144.144.1/24",
+                    Ipv4 = "10.144.144.1",
+                    Hostname = "registry",
+                    Cost = "p2p",
+                    Id = "9",
+                },
+            ],
+            [
+                new EasyTierPeerRoutePair
+                {
+                    Route = new EasyTierRouteInfo
+                    {
+                        PeerId = 9,
+                        Hostname = "registry",
+                        NodeTypeAppId = EtDiscoveryNodeTypeFlags.AppId,
+                        NodeTypeFlags = EtDiscoveryNodeTypeFlags.Registry,
+                    },
+                },
+            ],
+            new Dictionary<string, ForeignNetworkEntry>(StringComparer.Ordinal));
+
+        var peer = snapshot.Peers.Single();
+        Assert.That(peer.Roles, Is.EqualTo(new[] { NodeRole.Registry }));
+        Assert.That(peer.IsRegistryCandidate, Is.True);
+    }
+
+    [Test]
+    public void MissingRouteMetadataDefaultsRemotePeerToWorker()
+    {
+        var options = CreateOptions();
+        var mapper = new PeerObservationMapper();
+
+        var snapshot = mapper.Map(
+            options,
+            new EasyTierNodeInfo
+            {
+                PeerId = 1U,
+                Hostname = "local",
+                Ipv4Addr = "10.144.144.1/24",
+            },
+            [
+                new EasyTierPeerListItem
+                {
+                    Cidr = "10.144.144.2/24",
+                    Ipv4 = "10.144.144.2",
+                    Hostname = "plain-peer",
+                    Cost = "p2p",
+                    Id = "2",
+                },
+            ],
+            [],
+            new Dictionary<string, ForeignNetworkEntry>(StringComparer.Ordinal));
+
+        var peer = snapshot.Peers.Single();
+        Assert.That(peer.Roles, Is.EqualTo(new[] { NodeRole.Worker }));
+        Assert.That(peer.IsRegistryCandidate, Is.False);
     }
 
     private static EtDiscoveryWebOptions CreateOptions() => TestSamples.WebOptions();

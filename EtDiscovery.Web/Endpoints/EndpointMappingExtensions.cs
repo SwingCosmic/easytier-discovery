@@ -12,9 +12,12 @@ public static class EndpointMappingExtensions
             EtDiscoveryWebOptions options,
             EtDiscoveryProcessManager processManager,
             DiscoveryCatalogService catalogService,
-            EasyTierObservationService observationService) =>
+            EasyTierObservationService observationService,
+            RegistryLocator registryLocator) =>
         {
             var lastObservation = observationService.GetLastSnapshot();
+            var selectedRegistry = registryLocator.GetLastResolved();
+            var (appId, flags) = options.GetAdvertisedNodeTypeMetadata();
             return Results.Ok(new
             {
                 roles = options.Roles.Select(role => role.ToString().ToLowerInvariant()).ToArray(),
@@ -28,6 +31,17 @@ public static class EndpointMappingExtensions
                 privilegeChecklist = options.GetPrivilegeChecklist(),
                 observedLocalVirtualIp = lastObservation?.LocalNode.VirtualIp,
                 observedLocalNodeId = lastObservation?.LocalNode.NodeId,
+                advertisedNodeTypeAppId = appId,
+                advertisedNodeTypeFlags = flags,
+                selectedRegistry = selectedRegistry is null
+                    ? null
+                    : new
+                    {
+                        address = selectedRegistry.Address,
+                        source = selectedRegistry.Source,
+                        nodeId = selectedRegistry.NodeId,
+                        virtualIp = selectedRegistry.VirtualIp,
+                    },
                 easyTier = processManager.GetStatus(),
                 publishedServices = options.Services.Select(service => new
                 {
@@ -59,11 +73,23 @@ public static class EndpointMappingExtensions
                 isLocal = peer.IsLocal,
                 foreignNetworkName = peer.ForeignNetworkName,
                 cost = peer.Cost,
+                nodeTypeAppId = peer.NodeTypeAppId,
+                nodeTypeFlags = peer.NodeTypeFlags,
+                roles = peer.Roles.Select(role => role.ToString().ToLowerInvariant()).ToArray(),
+                isRegistryCandidate = peer.IsRegistryCandidate,
             });
 
             return Results.Ok(new
             {
                 observedAt = snapshot.ObservedAt,
+                localNode = new
+                {
+                    nodeId = snapshot.LocalNode.NodeId,
+                    virtualIp = snapshot.LocalNode.VirtualIp,
+                    nodeTypeAppId = snapshot.LocalNode.NodeTypeAppId,
+                    nodeTypeFlags = snapshot.LocalNode.NodeTypeFlags,
+                    roles = snapshot.LocalNode.Roles.Select(role => role.ToString().ToLowerInvariant()).ToArray(),
+                },
                 peers,
             });
         });
@@ -87,6 +113,40 @@ public static class EndpointMappingExtensions
                 }),
                 networkName = options.NetworkName,
                 timestamp = DateTimeOffset.UtcNow,
+            });
+        });
+
+        endpoints.MapGet("/discovery/registry", (
+            EtDiscoveryWebOptions options,
+            EasyTierObservationService observationService) =>
+        {
+            if (!options.IsRegistry)
+            {
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            }
+
+            var snapshot = observationService.GetLastSnapshot();
+            var virtualIp = snapshot?.LocalNode.VirtualIp ?? options.ConfiguredVirtualIp;
+            var nodeId = snapshot?.LocalNode.NodeId ?? "local-node";
+            var httpEndpoint = string.IsNullOrWhiteSpace(virtualIp)
+                ? options.ListenUrl
+                : $"http://{virtualIp}:{options.ListenPort}";
+
+            return Results.Ok(new RegistryMetadataResponse
+            {
+                NetworkName = options.NetworkName,
+                NodeId = nodeId,
+                VirtualIp = virtualIp,
+                Roles = options.Roles.Select(role => role.ToString().ToLowerInvariant()).ToArray(),
+                Endpoints = new RegistryEndpoints
+                {
+                    Http = httpEndpoint,
+                },
+                Capabilities = new RegistryCapabilities
+                {
+                    ServiceRegistration = true,
+                    ServiceResolve = true,
+                },
             });
         });
 
