@@ -10,7 +10,9 @@
 - [04. 参考资料与对比](./service-registry-references.md)
 - [05. 最小原型验证](./service-registry-prototype-validation.md)
 - [06. 实施方案与阶段计划](./service-registry-plan.md)
-- [07. EasyTier 仓库研究资料](../../easytier-research.md)
+- [07. Registry Bootstrap Discovery 设计草案](./service-registry-bootstrap-discovery.md)
+- [08. EasyTier RoutePeerInfo Node Type Flags 主仓库草案](../../easytier/docs/route_peer_node_type_flags.md)
+- [09. EasyTier 仓库研究资料](../../easytier-research.md)
 
 ## 当前结论
 
@@ -30,9 +32,13 @@
   - 内存里维护一份支持并发更新的注册/观测数据
   - 所有查询接口都读取该数据源在某一时刻的快照视图
   - 允许短时间内两次读取结果不同，不要求强一致
-- worker 定位 registry 时：
-  - 优先使用显式配置的 `RegistryPeer`
-  - 否则回退到首个远端可发现 peer 的 `VirtualIp`
+- worker/client 定位 registry 已按 [Registry Bootstrap Discovery 设计草案](./service-registry-bootstrap-discovery.md) 收敛为：
+  - 配置拆分：`EtDiscovery` 与 `EasyTier`（`Peers` 只属于 EasyTier）
+  - 显式 `RegistryCandidates`（兼容旧 `RegistryPeer`）
+  - EasyTier `node_type_app_id` / `node_type_flags` 传递节点角色（不可配置覆盖，始终由 `--roles` 推导）
+  - 无相关元数据时远端 peer 默认视为 `worker`
+  - registry 元数据接口：`GET /discovery/registry`（与 `/discovery/*` 并列，不使用 `.well-known`）
+  - **不再**把首个可发现 peer VIP 当作 registry
 
 ## 当前注意事项
 

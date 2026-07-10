@@ -11,6 +11,8 @@
 - [04. 参考点对照表](./service-registry-references/comparison-matrix.md)
 - [05. 关键算法与机制清单](./service-registry-references/key-mechanisms.md)
 - [06. 待补充资料清单](./service-registry-references/backlog.md)
+- [07. Bootstrap、Membership 与服务发现参考](./service-registry-references/bootstrap-and-membership-models.md)
+- [08. EasyTier RoutePeerInfo Node Type Flags 主仓库草案](../../easytier/docs/route_peer_node_type_flags.md)
 
 ## 当前重点参考
 
@@ -28,6 +30,21 @@
 - Kubernetes EndpointSlice
   - `ready / serving / terminating`
   - 参考其“可被流量选择”与“正在终止/排空”状态拆分
+
+针对 registry 自动发现与类似 DHCP 的 bootstrap 协议，重点参考：
+
+- DHCP
+  - 参考其“入网后自动获得基础设施地址与租约”的体验模型
+- Consul gossip / server-client 分层
+  - 参考其“成员节点”和“catalog 管理节点”分离
+- Envoy xDS / EDS
+  - 参考其“控制面发现”和“endpoint 数据面选择”分层
+- Serf
+  - 参考其“节点 tag/capability 声明，而不是从成员列表位置推断角色”
+- Well-Known URI / DNS SRV
+  - 参考其固定路径或服务名发现 metadata 的轻量做法
+- EasyTier `RoutePeerInfo`
+  - 参考其已存在的 route metadata 传播链路，将 registry 定位收敛到“官方能力标记 + 应用命名空间 flags”，而不是扫描所有 peer
 
 EtDiscovery 本轮拟采纳的 API 风格：
 
