@@ -1,156 +1,104 @@
 # 外部系统概览
 
-本文档汇总当前设计最相关的外部系统资料，便于后续讨论时直接引用。
+第三方注册发现与成员系统摘要。结构：机制事实 → 不宜照搬点 → 官方链接。  
+本仓库 API 定稿见 [应用层文档](../service-registry-application-layer.md)，不在此重复。
 
 ## 1. ZooKeeper
 
-适合借鉴：
+**机制：**
 
 - 临时节点与 session 生命周期
 - watch 事件模型
-- 版本化目录和元数据管理
+- 版本化目录与元数据
 
-不直接照搬：
+**不宜照搬：**
 
-- 强依赖中心 session 判活
+- 强依赖中心 session 判活（弱网下控制面断连不等于实例死亡）
 
-对本方案的启发：
-
-- 可借用“实例跟随会话生命周期变化”的建模方式
-- 但弱网与移动网络场景下，控制面断连不能直接视为实例死亡
-
-参考：
+**链接：**
 
 - [Apache ZooKeeper Programmer's Guide](https://zookeeper.apache.org/doc/current/zookeeperProgrammers.html)
 
 ## 2. Nacos
 
-适合借鉴：
+**机制：**
 
-- 服务、分组、集群、实例、metadata、weight、healthy、ephemeral 模型
-- 三段式心跳与摘除节奏
-- 服务发现与配置中心分层思路
+- 服务 / 分组 / 集群 / 实例 / metadata / weight / healthy / ephemeral
+- 注册与心跳分离；metadata、健康、列表多为独立接口
+- 资源模型偏“实例为主，服务为容器”
+- 服务发现与配置中心分层；存在“空保护”类降级思路
 
-不直接照搬：
+**不宜照搬：**
 
 - 默认数据中心式稳定网络前提
 
-对本方案的启发：
-
-- 服务实例模型和状态字段适合直接参考
-- “空保护”很适合弱网场景下的缓存降级和雪崩保护
-
-参考：
+**链接：**
 
 - [What is Nacos](https://nacos.io/en/docs/latest/what-is-nacos/)
 - [Nacos Open API](https://nacos.io/en/docs/latest/manual/user/open-api/)
 
-接口设计补充：
-
-- 资源模型以实例为主，服务是实例的归属容器
-- 注册与下线接口天然幂等，便于 worker 周期性重报
-- 心跳接口独立于注册接口，适合把“首次注册”和“保活”拆开
-- 实例 metadata、健康状态和实例列表查询也都是独立接口
-- 对 EtDiscovery 的直接启发是：
-  - `POST /discovery/instances`
-  - `DELETE /discovery/instances/{instanceId}`
-  - 后续预留单独的 `lease / health / metadata` 子接口
-
 ## 3. Consul
 
-适合借鉴：
+**机制：**
 
-- agent 模式
-- 多类型健康检查
-- prepared query 的策略化发现
+- agent 本地注册/检查，中心侧 catalog
+- register / deregister / maintenance 分离；管理端可覆盖服务状态而不必删注册
+- 多类型健康检查、prepared query 策略化发现
+- 接口常围绕本地 agent 组织
 
-不直接照搬：
+**不宜照搬：**
 
-- 以数据中心部署为主的默认前提
+- 以数据中心与 agent 常驻为主的默认部署前提
 
-对本方案的启发：
-
-- 本地 SDK/agent 负责采集和上报，中心负责聚合，这一点与本方案高度一致
-- prepared query 很适合映射为 `selectOneHealthyInstance` 一类查询
-
-参考：
+**链接：**
 
 - [Consul Service Discovery](https://developer.hashicorp.com/consul/docs/discover/service-dynamic-discovery)
 - [Consul Prepared Queries](https://developer.hashicorp.com/consul/docs/discover/load-balancer/prepared-query)
 - [Consul Agent Service API](https://developer.hashicorp.com/consul/api-docs/agent/service)
 
-接口设计补充：
+## 4. Eureka
 
-- 注册、注销和 maintenance 模式是拆开的
-- 管理端可对实例施加额外服务状态，而不必销毁注册记录
-- 这种风格适合 EtDiscovery 预留：
-  - `PUT /discovery/instances/{instanceId}/status`
-  - `DELETE /discovery/instances/{instanceId}/status`
-  - `PUT /discovery/nodes/{nodeId}/status`
-  - `DELETE /discovery/nodes/{nodeId}/status`
-
-不直接照搬的部分：
-
-- Consul 很多接口默认围绕本地 agent 组织，而 EtDiscovery 当前先用最小 HTTP registry 形态
-
-## 4. Orleans
-
-适合借鉴：
-
-- 多观察者怀疑投票
-- suspect 优先于立即 dead
-- 成员表只做视图协调
-
-不直接照搬：
-
-- 完整 membership 协议不必原样复制
-
-对本方案的启发：
-
-- 最值得借鉴的是“怀疑票 + 过期 + 多来源”
-- 非稳定网络下，存活判断应该是组合推断，而不是单点结论
-
-参考：
-
-- [Orleans Cluster Management](https://learn.microsoft.com/en-us/dotnet/orleans/implementation/cluster-management)
-
-## 5. Eureka
-
-适合借鉴：
+**机制：**
 
 - application / instance 分层
 - register / cancel / heartbeat 分离
-- 管理端状态覆盖可与自动状态并存
+- 管理端状态覆盖可与自动状态并存（如 `OUT_OF_SERVICE`）
 
-不直接照搬：
+**不宜照搬：**
 
-- 其应用名主导的资源路径偏重 Java 生态约定，不必原样沿用
+- 偏 Java 生态的 application-first 资源路径风格
 
-对本方案的启发：
-
-- 把“注册”和“续租”拆成独立语义
-- 允许实例既有自动可达状态，也有人工 `OUT_OF_SERVICE` 一类状态
-
-参考：
+**链接：**
 
 - [Eureka REST Operations](https://github.com/Netflix/eureka/wiki/eureka-rest-operations)
 
-## 6. Kubernetes EndpointSlice
+## 5. Kubernetes EndpointSlice
 
-适合借鉴：
+**机制：**
 
-- `ready / serving / terminating` 的状态拆分
-- 面向 endpoint/instance 的列表管理方式
+- 以 endpoint 列表表达后端
+- 条件拆分：`ready` / `serving` / `terminating`
+- 可携带 node、zone 等拓扑信息
 
-不直接照搬：
+**不宜照搬：**
 
-- 不引入 Kubernetes 那套资源版本、控制器和 declarative reconciliation 全量机制
+- 完整声明式控制器、资源版本与 reconciliation 体系
 
-对本方案的启发：
-
-- EtDiscovery 后续应避免只用一个布尔值表达实例可用性
-- 本轮虽然只先占位，但接口设计上要给 `health` 与 `status/draining` 分离留下空间
-
-参考：
+**链接：**
 
 - [Kubernetes EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/)
+
+## 6. Orleans
+
+**机制：**
+
+- 多观察者怀疑投票；suspect 优先于立即 dead
+- 成员表侧重视图协调
+
+**不宜照搬：**
+
+- 完整 membership 协议原样复制
+
+**链接：**
+
+- [Orleans Cluster Management](https://learn.microsoft.com/en-us/dotnet/orleans/implementation/cluster-management)

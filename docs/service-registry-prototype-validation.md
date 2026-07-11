@@ -1,232 +1,119 @@
-# 最小 Web 原型验证
+# 原型验证 Runbook
 
-本文档记录 `etdiscovery` 首轮最小 Web 原型的实现范围、当前验证结论和已确认的注意事项。
+本文档说明最小 Web 原型的 **启动方式、平台权限与排查要点**。  
+“做到哪了、接口是否占位”见 [实施方案](./service-registry-plan.md)；目标设计见 [核心设计](./service-registry-core-design.md) / [应用层](./service-registry-application-layer.md) / [Bootstrap](./service-registry-bootstrap-discovery.md)。
 
-## 1. 目标
+---
 
-首轮目标不是最终架构定稿，而是先验证以下问题：
+## 1. 验证目标
 
-- 能否在 `etdiscovery/` 下用纯 C# 快速搭建最小可运行原型
-- 能否由 Web 服务托管 `easytier-core`，并通过 `easytier-cli` 读取真实组网状态
-- 能否将 discovery 核心逻辑下沉到独立类库，并保持单元测试不依赖真实网络
-- 能否完成 `registry + worker` 两节点的最小真实链路验证
+- 用 C# 原型托管 `easytier-core`，经 `easytier-cli` 读真实组网状态
+- discovery 核心逻辑可在 `EtDiscovery.Core` 中单测，不依赖真实网络
+- 完成 `registry + worker` 最小真实链路（发现 registry + 注册实例）
 
-## 2. 当前项目结构
+---
 
-当前以仓库现状为准：
+## 2. 项目结构
 
-- `etdiscovery/EtDiscovery.Web/`
-- `etdiscovery/EtDiscovery.Core/`
-- `etdiscovery/EtDiscovery.Tests/`
-- `etdiscovery/docs/`
+- `etdiscovery/EtDiscovery.Web/` — 托管 EasyTier、HTTP API、role host
+- `etdiscovery/EtDiscovery.Core/` — 模型与策略
+- `etdiscovery/EtDiscovery.Tests/` — 纯逻辑测试
+- `etdiscovery/docs/` — 设计与进度文档
 
-其中：
+---
 
-- `EtDiscovery.Web`
-  - 托管 `easytier-core`
-  - 调用 `easytier-cli`
-  - 提供最小 Web API
-- `EtDiscovery.Core`
-  - 承载 discovery 相关模型和策略
-- `EtDiscovery.Tests`
-  - 以纯模拟数据验证核心逻辑和部分 Web 侧纯逻辑
+## 3. 启动要点
 
-## 3. 已落地能力
+- **必须**命令行提供 `--roles`（`registry` / `worker` / `client`，可组合）
+- 其余优先读配置文件；`EtDiscovery` 与 `EasyTier` 分节
+- `easytier-core` 由生成 TOML + `-c` 启动，另加分配的 `--rpc-portal`
+- 角色元数据只由 `--roles` 写入 `node_type_*`，勿在配置中手写覆盖字段
 
-### 3.1 启动与配置
+配置与 registry 定位字段说明见 [bootstrap 配置模型](./service-registry-bootstrap-discovery.md#5-配置模型)。  
+运维硬约束（ListenUrl、listeners、Windows 提权等）见 [plan 限制](./service-registry-plan.md#3-当前限制与运维假设)。
 
-- `--roles` 为唯一必须显式通过命令行提供的参数
-- 其他参数统一从配置文件读取
-- 角色统一使用：
-  - `registry`
-  - `worker`
-  - `client`
+---
 
-### 3.2 EasyTier 进程托管
+## 4. 推荐验证路径
 
-- 使用 `ProcessStartInfo.ArgumentList` 逐项构造参数
-- 自动分配本地 RPC 地址并传给 `--rpc-portal`
-- 应用退出时自动回收子进程
-- 已增加最近 `stdout/stderr` 缓存和退出摘要日志
+### 4.1 Windows
 
-### 3.3 HTTP 接口
+1. `registry`：固定 `EasyTier.Ipv4`，`EtDiscovery.ListenUrl=http://0.0.0.0:8080`
+2. 以管理员权限运行发布产物 `EtDiscovery.Web.exe --roles registry`（不要用 `dotnet xxx.dll` 期望 UAC）
+3. `worker`：另一实例，`--roles worker`；`EasyTier.Peers` 指向 registry 入网地址；`RegistryCandidates` 可空以测 route metadata 发现
+4. worker 可先 DHCP；不稳则写死 worker VIP
+5. 检查：
+   - `curl http://<registry-vip>:8080/health`
+   - `curl http://<registry-vip>:8080/discovery/registry`
+   - worker 日志中 selected registry；registry 上服务列表含 worker 实例
 
-当前接口全部去掉 `/api` 前缀：
+### 4.2 Linux
+
+1. 确认 `/dev/net/tun` 与 `tun` 模块（`modprobe tun`）
+2. 需要本机 VIP 时通常要 root 或等效权限
+3. 再按上节启动 registry / worker
+
+### 4.3 EasyTier 元数据抽查
+
+```text
+easytier-cli -p <rpc> -n <instance> -o json node info
+easytier-cli -p <rpc> -n <instance> -o json -v peer list
+```
+
+关注：
+
+- 生成 TOML 含 `listeners`、`node_type_app_id` / `node_type_flags` 且与角色一致
+- registry 的 listeners 含 `tcp://...:11010` 一类，而非只有 `ring://`
+- 远端 peer list 可见 registry 的 app_id=1 与 registry bit
+- 无标记 peer 不会被当成 registry
+
+---
+
+## 5. 权限与平台
+
+### 5.1 Windows
+
+- 需要本机虚拟 IP 时视为需要管理员：registry、静态 `Ipv4`、DHCP
+- 权限不足常见现象：`Failed to create adapter`、本机 `virtualIp` 空、DHCP 超时
+- `app.manifest` 嵌入 `requireAdministrator`；**仅** `EtDiscovery.Web.exe` 触发 UAC
+
+### 5.2 Linux
+
+- 需要本机 VIP 时须 TUN 可用
+- 可选能力可能额外需要 `CAP_NET_ADMIN`（与最基本 TUN 前提不同层）
+
+### 5.3 DHCP 含义
+
+- `worker + dhcp` = EasyTier 自动选本机虚拟地址逻辑
+- **不是** registry 充当传统 DHCP 服务器并主动分配地址
+- registry 单点启动时不应盲目自开 DHCP，避免 registry IP 漂移
+
+---
+
+## 6. 排查接口与字段
+
+### 6.1 常用 HTTP
+
+完整路径与语义见 [应用层 API](./service-registry-application-layer.md#4-应用层-api)。验证时常用：
 
 - `GET /health`
 - `GET /easytier/peers`
-- `GET /test/ping`
-- `POST /discovery/instances`
-- `DELETE /discovery/instances/{instanceId}`
-- `GET /discovery/instances/{instanceId}`
+- `GET /discovery/registry`
 - `GET /discovery/services`
 - `GET /discovery/select`
+- `POST/DELETE /discovery/instances...`
 
-### 3.4 registry 侧能力
+### 6.2 观测字段提示
 
-- 通过 `easytier-cli` 读取 peer 列表
-- 按 `network-name` 和 `virtual-network-cidr` 过滤 discovery 候选
-- 维护实例注册表，按 `instanceId` upsert / deregister 真实服务实例
-- `/discovery/services` 返回已注册且当前可发现的实例列表
+- peers：`networkName`、`virtualIp`、`sameNetwork`、`inVirtualNetworkCidr`、`eligibleForDiscovery`、roles / `node_type_*`
+- health：`configuredVirtualIp`、`dhcpEnabled`、权限相关 checklist、EasyTier 最近 stdout/stderr
 
-### 3.5 worker 侧能力
+### 6.3 网络筛选
 
-- 可加入现有 EasyTier 网络
-- 可暴露最小 `/test/ping`
-- 可根据 `Services[]` 配置主动向 registry 注册服务实例
-- 当本机同时具备 `registry + worker` 角色时，可直接走进程内注册逻辑
-- 可选择：
-  - 显式配置静态 `Ipv4`
-  - 在未配置 `Ipv4` 时追加 `--dhcp`
+`/discovery/*` 候选通常要求同网且 VIP 落在 `virtual-network-cidr` 内（具体以当前实现为准）。
 
-## 4. 当前验证结论
+---
 
-### 4.1 已初步验证可用
+## 7. 已知问题索引
 
-- 最小 Web 应用可以正常运行
-- `registry` 与 `worker` 的核心逻辑链路已经打通
-- `registry` 可以读取 EasyTier peer 状态并结合实例注册表生成 discovery 视图
-- 增强日志和 `/health` 输出后，排查体验已明显改善
-
-### 4.2 已确认的 EasyTier 行为
-
-- `EtDiscovery:Ipv4` 为空时，EasyTier 不会直接创建本机 TUN 虚拟地址
-- `worker + --dhcp` 的含义是：
-  - 由 worker 自己启用 EasyTier 的自动地址选择逻辑
-  - 不是“registry 显式充当 DHCP 服务器并主动分配地址”
-- `registry` 不应因为“单点启动”而自动附加 `--dhcp`
-  - 否则 registry 自己的 IP 可能漂移
-
-### 4.3 DHCP 现阶段结论
-
-- 官方 desktop 客户端在 Windows 上开启 DHCP 后，能够拿到 `10.1.1.2`
-- Web 原型中仅给 worker 追加 `--dhcp` 后，逻辑方向已与 EasyTier 源码一致
-- 但 DHCP 是否最终成功，还取决于节点是否有权限完成虚拟网卡创建与 IP 落地
-
-## 5. 权限与平台注意事项
-
-## 5.1 Windows
-
-- 只要节点需要本机虚拟 IP，就应视为需要管理员权限
-- 当前已确认需要管理员权限的典型场景：
-  - `registry`
-  - `worker` 使用静态 `Ipv4`
-  - `worker` 使用 `--dhcp`
-- 若权限不足，典型现象包括：
-  - `Failed to create adapter`
-  - 本机 `virtualIp` 一直为空
-  - DHCP 超时
-
-### 5.1.1 Windows 清单嵌入
-
-项目已新增 `EtDiscovery.Web/app.manifest` 并在 Windows 构建时嵌入：
-
-- `requestedExecutionLevel = requireAdministrator`
-- `UseAppHost = true`
-
-注意：
-
-- 只有运行生成出的 `EtDiscovery.Web.exe` 才会触发 UAC 提权
-- 如果使用 `dotnet EtDiscovery.Web.dll` 启动，不会自动提权
-
-### 5.1.2 Windows 推荐启动方式
-
-- 优先运行发布或构建输出的 `EtDiscovery.Web.exe`
-- 使用管理员权限启动
-
-## 5.2 Linux
-
-根据 EasyTier 源码当前可确认的最小前提：
-
-- 如果需要本机虚拟 IP，则必须保证 TUN 可用
-- 通常需要 `root` 或等效权限
-- 需要确保 `/dev/net/tun` 可访问
-- 必要时执行：
-  - `modprobe tun`
-- 某些可选能力需要 `CAP_NET_ADMIN`
-  - 例如部分 socket mark 相关功能
-  - 这与最基本的 TUN 前提不是同一层要求
-
-## 6. 当前实现约束
-
-### 6.1 网络筛选
-
-- `/discovery/*` 只基于以下候选构建：
-  - `sameNetwork = true`
-  - 虚拟 IP 位于 `virtual-network-cidr` 内
-
-### 6.2 服务元数据
-
-- worker 已实现主动注册/下线服务实例
-- registry 已支持一个服务名对应多个实例
-- registry 自身兼任 worker 时，也可把本机服务实例注册到目录中
-- 配置结构已从单服务字段切换为 `Services[]`
-
-### 6.3 状态观测
-
-- `/easytier/peers` 会明确返回：
-  - `networkName`
-  - `virtualIp`
-  - `sameNetwork`
-  - `inVirtualNetworkCidr`
-  - `eligibleForDiscovery`
-- `/health` 当前会额外返回：
-  - `configuredVirtualIp`
-  - `dhcpEnabled`
-  - `requiresTunDevice`
-  - `requiresWindowsElevationForEasyTier`
-  - `processElevated`
-  - `privilegeChecklist`
-  - `easyTier.recentStdout`
-  - `easyTier.recentStderr`
-
-### 6.4 内存状态读取模型
-
-- 当前原型在内存中维护一份共享数据源：
-  - EasyTier 节点观测快照
-  - 已注册服务实例表
-  - 已构建的 discovery catalog
-- 数据源本身允许后台线程并发更新，因此实现上优先使用并发集合或“整体替换快照引用”的方式。
-- 对外接口的读取语义是“瞬时快照”：
-  - 每次请求都读取当前时刻可见的数据
-  - 不保证连续两次读取完全一致
-  - 不要求节点状态、实例状态、选择结果之间形成强一致事务视图
-- 这样做是有意设计，因为在 EasyTier 节点观测和服务注册场景里，底层事实本身就存在传播延迟、掉线抖动和短暂不确定性。
-
-## 7. 推荐验证路径
-
-### 7.1 Windows
-
-推荐流程：
-
-1. `registry` 使用显式固定 `Ipv4`
-2. 运行 `EtDiscovery.Web.exe`
-3. 使用管理员权限启动
-4. `worker` 先尝试未配置 `Ipv4` 且启用 `--dhcp`
-5. 若现场环境下 DHCP 不稳定，再改为显式静态 `Ipv4`
-
-### 7.2 Linux
-
-推荐流程：
-
-1. 先检查 `/dev/net/tun`
-2. 确认 `tun` 模块已加载
-3. 再启动 Web 原型
-
-## 8. 当前后续建议
-
-- 在原型继续演进前，优先保持“可排查性”
-- Windows 与 Linux 的启动方式、权限要求和排查步骤应同步写入用户文档
-- 若后续需要继续依赖 DHCP 行为，建议增加：
-  - 更明确的 DHCP 成功/失败状态日志
-  - 更细粒度的 `blockingReason`
-  - Windows 与 Linux 的启动示例
-
-## 9. 当前阶段结论
-
-首轮最小 Web 原型已经具备继续推进的基础，原因是：
-
-- Web 托管 EasyTier 已可用
-- discovery 核心逻辑已从真实网络依赖中拆分出来
-- Windows 权限问题、DHCP 行为和启动方式的关键偏差已被明确识别
-- 当前剩余问题更多是“环境与运行方式约束”，而不是原型整体方向错误
+联调已修问题与强制运维约束汇总在 [plan §3](./service-registry-plan.md#3-当前限制与运维假设)，此处不重复维护第二份表格。

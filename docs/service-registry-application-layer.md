@@ -1,6 +1,11 @@
 # 应用层与集成设计
 
-本文档聚焦应用层 API、现有服务注册体系的集成与替代路径，以及移动端打包边界。
+本文档是 **应用层 API、运行模式与 SDK 边界、框架集成** 的权威说明。  
+实现进度与占位接口清单见 [实施方案与阶段计划](./service-registry-plan.md#2-当前实现进度)。  
+Registry 自动发现协议见 [Registry Bootstrap Discovery](./service-registry-bootstrap-discovery.md)。  
+角色与评分模型见 [核心设计](./service-registry-core-design.md)。
+
+---
 
 ## 1. 应用层定位
 
@@ -16,399 +21,281 @@
 - 接管业务重试策略
 - 伪装成现有注册中心协议兼容层
 
-首版主推进方向建议进一步明确为：
+定位一句话：
 
-- `registry` 与 `worker` 复用同一份 EtDiscovery runtime 代码。
-- runtime 通过配置或启动参数决定当前节点角色，而不是和业务服务耦合成两套产品。
-- 业务侧 SDK 首版保持很薄，主要负责调用本地 runtime 暴露的 HTTP/gRPC 接口。
-- 业务服务获取目标实例后，继续使用自己现有的 HTTP/gRPC/TCP 客户端直连目标业务地址。
+- EtDiscovery runtime 是独立本地组件
+- 各语言 SDK 是 runtime 的轻量 client wrapper
+- 业务调用链是“先查地址，再直连发业务 RPC”
 
-换句话说，首版更接近：
+---
 
-- EtDiscovery runtime 是一个独立本地组件
-- 各语言 SDK 是这个本地组件的轻量 client wrapper
-- 业务调用链仍是“先查地址，再直连发业务 RPC”
+## 2. 运行模式与 SDK 边界
 
-## 2. 首版代码组织与语言 SDK 边界
+将“部署形态”和“应用接入契约”解耦：同一套 API 语义，多种承载方式。
 
-建议把首版代码组织冻结成以下形态：
+### 2.1 三层边界
 
-- 一份统一 runtime 代码
-  - 负责 `registry`、`worker` 等角色的公共能力
-  - 通过角色分支决定当前节点启用哪些子模块
-- 多个承载模式
-  - sidecar
-  - host daemon
-  - embedded runtime
-- 多语言薄 SDK
-  - Node.js/Java/.NET 首版都优先做 runtime client
-  - 不把服务选择、bootstrap、网络诊断状态机复制到各语言
+| 边界 | 职责 |
+| --- | --- |
+| 应用进程 | 业务身份、服务定义、业务健康、调用反馈；保留 HTTP/gRPC/TCP 栈；不感知 EasyTier 路由细节，不跑 registry bootstrap |
+| 本地 runtime | registry 定位、缓存、watch、实例选择、反馈汇总、诊断；与 EasyTier 控制桥；可选托管 EasyTier 进程 |
+| registry / control-plane | 目录聚合、状态整合、策略下发、审计与跨节点视图；不接管业务连接池与序列化 |
 
-### 2.1 runtime 内部建议分层
+约束：
+
+- SDK：稳定契约（注册、发现、选择、反馈）
+- runtime：网络与缓存复杂度
+- 业务框架：真正发请求
+
+### 2.2 中间件定位
+
+EtDiscovery 介于 APM 与 service mesh 之间：
+
+- 比 mesh 更贴近应用（身份、健康、元数据、反馈来自应用语义）
+- 比 APM 更松耦合（不强制侵入每个调用栈）
+- K8s 中 sidecar / Node daemon / 宿主机进程只是承载位置不同，契约不变
+
+不宜做成“强绑定某框架的深嵌 SDK”，也不宜退化成“完全无应用参与的透明代理”。推荐：**薄 SDK + 本地 runtime**。
+
+### 2.3 运行模式矩阵
+
+| 模式 | 说明 | 首版建议 |
+| --- | --- | --- |
+| sidecar | 与业务就近部署；本地 HTTP/gRPC/Unix Socket | 主推（K8s、Node.js、Java） |
+| host daemon | 多进程共享宿主机 runtime | 主推补充（VM/物理机） |
+| embedded | C ABI/FFI 进程内 | 次路径（Rust/C++、时延敏感） |
+| no-SDK | 直接打 HTTP/gRPC 接口 | 运维验证、脚本、渐进迁移 |
+
+四种模式共享：同一应用层 API 语义、同一实例/反馈模型、同一 runtime 控制协议。
+
+### 2.4 代码组织
+
+- 一份统一 runtime：`registry` / `worker` / `client` 等为角色分支，不是多套产品
+- 多语言薄 SDK：首版优先 runtime client，不在各语言复制选择/bootstrap/评分状态机
+
+runtime 内部建议分层：
 
 - control-plane client
-  - 与 registry 通信
-- discovery engine
-  - 本地缓存、watch、实例选择、反馈回写
+- discovery engine（缓存、watch、选择、反馈）
 - EasyTier bridge
-  - 读取 peer/route/link/network 信号
 - diagnostics
-  - 调试、健康、错误码、评分拆解
 - role host
-  - 根据 `registry` 或 `worker` 角色启用不同能力
 
-### 2.2 业务 SDK 首版建议只承担的职责
+业务 SDK 建议只做：请求组装、本地 runtime 通信、对象映射、轻量 watch/缓存、框架薄适配。  
+业务 SDK 不做：直连远端 registry、bootstrap、读 EasyTier route、完整评分、代理业务 RPC。
 
-- 组装注册、查询、选择、反馈请求
-- 与本地 runtime 的 HTTP/gRPC client 通信
-- 把返回值映射为语言友好的对象
-- 对 `watch`、重连和少量本地缓存做轻量封装
-- 为 Spring、Dubbo、.NET DI、Node.js 中间件提供薄适配
+### 2.5 最小调用闭环
 
-### 2.3 业务 SDK 首版不建议承担的职责
+1. 一节点 `registry`。
+2. 靠近业务的节点各跑 `worker`（和/或 `client`）。
+3. provider / consumer 经薄 SDK 调本地 runtime。
+4. provider 侧注册、续约、健康上报。
+5. consumer 侧查询、筛选、返回 `SelectedInstance`。
+6. 应用直连目标 `virtual_ip:port` 或 `recommended_endpoint`。
 
-- 直接与远端 registry 通信
-- 自己实现 registry bootstrap discovery
-- 自己读取 EasyTier route/peer 元数据
-- 在各语言里复制完整评分与选择逻辑
-- 代理或接管业务 RPC 连接池、序列化、重试
+### 2.6 协议层建议
 
-### 2.4 最小调用闭环
+- 应用可见：`register / renew / deregister / resolve / select / watch / report`
+- runtime 内部：bootstrap、cache、policy、diagnostics、EasyTier bridge
+- 传输：长期 gRPC 为主、HTTP/JSON 便于调试与无 SDK 接入；当前原型以 HTTP/JSON 为主
 
-以 `1 registry + 2 worker + 2 app` 的极简场景为例，首版推荐闭环是：
-
-1. 一台设备或容器运行 `registry` 角色。
-2. 两台靠近业务应用的设备或容器各运行一个 `worker` 角色。
-3. provider 和 consumer 都通过各自语言的薄 SDK 调用本地 `worker`。
-4. provider 侧 `worker` 负责注册、续约、健康上报。
-5. consumer 侧 `worker` 负责查询、筛选、评分、返回 `SelectedInstance`。
-6. consumer 应用拿到目标地址后，直接向目标实例的 `virtual_ip:port` 或 `recommended_endpoint` 发起业务 RPC。
+---
 
 ## 3. 架构图
 
-### 3.1 极简三节点主路径
+### 3.1 极简主路径
 
 ```mermaid
 flowchart LR
-  subgraph NodeA["节点 A / Registry"]
+  subgraph NodeR["Registry 节点"]
     R["EtDiscovery Runtime
 role=registry"]
   end
 
-  subgraph NodeB["节点 B / Provider"]
-    AppB["业务服务 B"]
-    SdkB["薄 SDK B"]
-    Wb["EtDiscovery Runtime
-role=worker"]
-    EtB["EasyTier Runtime"]
-    AppB --> SdkB --> Wb
-    Wb <--> EtB
+  subgraph NodeP["Provider 节点"]
+    AppP["业务服务"]
+    SdkP["薄 SDK"]
+    Wp["Runtime role=worker"]
+    EtP["EasyTier"]
+    AppP --> SdkP --> Wp
+    Wp <--> EtP
   end
 
-  subgraph NodeC["节点 C / Consumer"]
-    AppC["业务服务 C"]
-    SdkC["薄 SDK C"]
-    Wc["EtDiscovery Runtime
-role=worker"]
-    EtC["EasyTier Runtime"]
+  subgraph NodeC["Consumer 节点"]
+    AppC["业务服务"]
+    SdkC["薄 SDK"]
+    Wc["Runtime role=worker/client"]
+    EtC["EasyTier"]
     AppC --> SdkC --> Wc
     Wc <--> EtC
   end
 
-  Wb <-- "register / renew / health" --> R
+  Wp <-- "register / renew / health" --> R
   Wc <-- "resolve / select / watch / report" --> R
-  AppC -. "业务 RPC 直连" .-> AppB
+  AppC -. "业务 RPC 直连" .-> AppP
 ```
 
-### 3.2 Kubernetes Sidecar 模式
+### 3.2 Sidecar / Daemon / Embedded
+
+三种承载只改变 runtime 与业务进程的部署关系，不改变上图语义。示意见下：
 
 ```mermaid
 flowchart LR
-  subgraph Pod1["Pod 1"]
-    App1["业务容器"]
-    Sdk1["薄 SDK"]
-    Sidecar1["EtDiscovery Sidecar"]
-    Easy1["EasyTier Runtime"]
-    App1 --> Sdk1 --> Sidecar1
-    Sidecar1 <--> Easy1
+  subgraph Sidecar["Sidecar"]
+    A1[App] --> S1[SDK] --> R1[Runtime sidecar]
   end
-
-  subgraph Pod2["Pod 2"]
-    App2["业务容器"]
-    Sdk2["薄 SDK"]
-    Sidecar2["EtDiscovery Sidecar"]
-    Easy2["EasyTier Runtime"]
-    App2 --> Sdk2 --> Sidecar2
-    Sidecar2 <--> Easy2
+  subgraph Daemon["Host Daemon"]
+    A2a[App A] --> S2a[SDK]
+    A2b[App B] --> S2b[SDK]
+    S2a --> D[Daemon]
+    S2b --> D
   end
-
-  Registry["Registry Runtime"] <---> Sidecar1
-  Registry <---> Sidecar2
-  App2 -. "业务 RPC 直连" .-> App1
+  subgraph Embedded["Embedded"]
+    A3[App] --> S3[封装] --> E[Embedded Runtime]
+  end
 ```
 
-### 3.3 Host Daemon / Slim 模式
+---
 
-```mermaid
-flowchart LR
-  subgraph Host1["宿主机 1"]
-    App1A["业务进程 A"]
-    App1B["业务进程 B"]
-    Sdk1A["薄 SDK A"]
-    Sdk1B["薄 SDK B"]
-    Daemon1["EtDiscovery Daemon"]
-    Easy1["EasyTier Runtime"]
-    App1A --> Sdk1A --> Daemon1
-    App1B --> Sdk1B --> Daemon1
-    Daemon1 <--> Easy1
-  end
+## 4. 应用层 API
 
-  subgraph Host2["宿主机 2"]
-    App2["业务进程 C"]
-    Sdk2["薄 SDK C"]
-    Daemon2["EtDiscovery Daemon"]
-    Easy2["EasyTier Runtime"]
-    App2 --> Sdk2 --> Daemon2
-    Daemon2 <--> Easy2
-  end
+本节定义语义 API 与当前 HTTP 映射。**是否已实现只在 [plan](./service-registry-plan.md#22-接口进度清单) 维护，此处不写进度勾选。**
 
-  Registry["Registry Runtime"] <---> Daemon1
-  Registry <---> Daemon2
-  App2 -. "业务 RPC 直连" .-> App1A
-```
+### 4.1 设计约定
 
-### 3.4 Embedded Runtime / C ABI 模式
+- 以 **实例资源** 为核心；服务名是筛选维度，不是唯一控制入口
+- 注册与下线分离；续租、健康、运维状态、元数据宜独立子资源
+- 最小核心能力：注册、发现、选择、反馈
+- `selectOneHealthyInstance` 是首版最重要的消费侧能力
+- 读取语义：共享状态的瞬时快照，非强一致事务读（见核心设计与 plan）
 
-```mermaid
-flowchart LR
-  subgraph Proc1["进程 1"]
-    App1["业务服务"]
-    Sdk1["语言封装"]
-    Emb1["Embedded Runtime
-C ABI / FFI"]
-    Easy1["EasyTier Runtime"]
-    App1 --> Sdk1 --> Emb1
-    Emb1 <--> Easy1
-  end
+### 4.2 API 对照表
 
-  subgraph Proc2["进程 2"]
-    App2["业务服务"]
-    Sdk2["语言封装"]
-    Emb2["Embedded Runtime
-C ABI / FFI"]
-    Easy2["EasyTier Runtime"]
-    App2 --> Sdk2 --> Emb2
-    Emb2 <--> Easy2
-  end
+| 能力 | 语义 API | HTTP（原型约定） | 说明 |
+| --- | --- | --- | --- |
+| 注册/更新实例 | `register_service` | `POST /discovery/instances` | upsert by instanceId |
+| 注销实例 | `deregister` | `DELETE /discovery/instances/{instanceId}` | |
+| 查询单实例 | — | `GET /discovery/instances/{instanceId}` | |
+| 按服务列实例 | `resolve` | `GET /discovery/services?serviceName=...` | |
+| 选择实例 | `selectOneHealthyInstance` | `GET /discovery/select` | |
+| 选择多个 | `selectManyHealthyInstances` | 待补充 | |
+| 续租 | `renew` | `PUT /discovery/instances/{instanceId}/lease` | |
+| 健康上报 | — | `PUT /discovery/instances/{instanceId}/health` | |
+| 运维状态 | `set_draining` 等 | `PUT/DELETE .../status` | 含 node 级 status |
+| 元数据更新 | — | `PUT /discovery/instances/{instanceId}/metadata` | |
+| 实例列表 | — | `GET /discovery/instances` | |
+| 节点下实例 | — | `GET /discovery/nodes/{nodeId}/instances` | |
+| Watch | `watch` | 待定（流式） | 需本地缓存回放与重连 |
+| 调用反馈 | `report_call_result` | 待定 | |
+| 推荐调用方式 | `recommend_call_mode` | 待定 | |
+| Registry 元数据 | （bootstrap） | `GET /discovery/registry` | 见 bootstrap 文档；**不是** `/.well-known/...` |
+| 进程健康 | — | `GET /health` | 运维 |
+| Peer 观测 | — | `GET /easytier/peers` | 运维/诊断 |
 
-  Registry["Registry Runtime"] <---> Emb1
-  Registry <---> Emb2
-  App2 -. "业务 RPC 直连" .-> App1
-```
-
-## 4. SDK API 草案
-
-本节中，已经进入当前原型的能力会额外标注“已落地”；仅保留接口占位的会标注“占位”。
-
-### 4.1 注册 API
+### 4.3 注册 API（语义）
 
 - `register_service(definition, instance, health_check)`
-  - 已落地为 `POST /discovery/instances`
 - `renew(instance_id, lease_epoch)`
-  - 当前仅保留接口方向，对应 `PUT /discovery/instances/{instanceId}/lease` 占位
 - `deregister(instance_id)`
-  - 已落地为 `DELETE /discovery/instances/{instanceId}`
-- `set_draining(instance_id)`
-  - 当前仅保留接口方向，将由 `status` 类接口承载
+- `set_draining(instance_id)`（由 status 类接口承载）
 
-### 4.2 发现 API
+### 4.4 发现 API（语义）
 
 - `resolve(service_query) -> ordered instances`
-  - 已落地为 `GET /discovery/services?serviceName=...`
 - `selectOneHealthyInstance(service_query, call_context) -> selected instance`
-  - 已落地为 `GET /discovery/select`
-- `selectManyHealthyInstances(service_query, call_context, limit) -> ordered selected instances`
+- `selectManyHealthyInstances(service_query, call_context, limit)`
 - `watch(service_query) -> instance change stream`
 - `get_node_profile(node_id)`
 
-### 4.3 调用治理 API
+`call_context` 宜包含：调用方角色、区域、网络偏好、协议要求、超时预算。
+
+### 4.5 调用治理 API（语义）
 
 - `recommend_call_mode(selected_instance, call_context)`
 - `report_call_result(selected_instance_id, result, latency, error_type)`
 - `open_circuit(instance_id, reason)`
 
-### 4.4 设计约束
+### 4.6 与 registry 定位的关系
 
-- API 的最小核心是“注册、发现、选择、反馈”四件事。
-- `selectOneHealthyInstance` 是首版最重要的应用层能力。
-- `watch` 需要支持本地缓存回放和断线重连。
-- `call_context` 需要包含调用方角色、区域、网络偏好、协议要求与超时预算。
-- 当前原型已经把“注册、发现、选择”打通；“续租、watch、反馈、主动状态控制”仍待后续补齐。
-- 当前原型的数据读取语义不是强一致读，而是“读取共享内存数据源的瞬时快照”：
-  - 注册表和节点观测允许并发更新
-  - 查询接口读取当前时刻可见视图
-  - 连续两次查询可能得到不同结果，这被视为正常行为
+worker/client 如何找到 registry 属于 bootstrap 协议，**不**在各语言 SDK 内实现。  
+候选优先级见 [bootstrap](./service-registry-bootstrap-discovery.md)：
 
-## 5. SelectedInstance 返回模型建议
+1. 显式 `RegistryCandidates`
+2. EasyTier route metadata（`node_type_app_id` + registry bit）
+3. 探测 `GET /discovery/registry`
+
+配置字段使用 `RegistryCandidates`；旧名 `RegistryPeer` 仅过渡期兼容，计划移除。
+
+---
+
+## 5. SelectedInstance 返回模型
 
 建议至少包含：
 
-- `service_name`
-- `instance_id`
-- `node_id`
-- `virtual_ip`
-- `endpoints`
-- `protocols`
-- `recommended_endpoint`
-- `recommended_call_mode`
-- `health_state`
-- `score`
-- `score_breakdown`
-- `node_profile`
-- `link_profile`
-- `topology_path`
-- `config_epoch`
-- `acl_epoch`
-- `config_validity`
+- `service_name`、`instance_id`、`node_id`
+- `virtual_ip`、`endpoints`、`protocols`
+- `recommended_endpoint`、`recommended_call_mode`
+- `health_state`、`score`、`score_breakdown`
+- `node_profile`、`link_profile`、`topology_path`
+- `config_epoch`、`acl_epoch`、`config_validity`
 
-这样业务方可以：
+首版体验：应用应能“拿到即连接”——以 `recommended_endpoint` 为主，保留 `virtual_ip` / `port` / `protocol` 作诊断。
 
-- 继续使用现有 HTTP/gRPC/TCP 客户端
-- 只把 etdiscovery 当成“智能地址簿 + 选择器”
-- 在失败后把实际结果反馈回来
-
-首版建议至少保证 `SelectedInstance` 能直接支撑“拿到即发起连接”的体验：
-
-- 应用不应只拿到一个孤立的 `virtual_ip`
-- 而应拿到可直接构造目标地址的 `recommended_endpoint`
-- 同时保留 `virtual_ip`、`port`、`protocol` 作为显式诊断字段
-- 如果后续接入 gRPC/Spring/Dubbo，也应围绕这个统一返回模型适配
+---
 
 ## 6. 与现有服务注册框架的关系
 
 ### 6.1 不做协议兼容的原因
 
-- 现有系统大多针对稳定局域网或数据中心拓扑设计。
-- etdiscovery 的核心差异是把 NAT、relay、虚拟网络链路质量、跨区域分区和移动网络波动纳入选择逻辑。
-- 如果一开始就做 Nacos/Consul/ZooKeeper 协议兼容，会被历史模型约束。
+- 既有系统多假设稳定数据中心网络
+- EtDiscovery 要把 NAT、relay、链路质量、跨区域与移动波动纳入选择
+- 一上来做 Nacos/Consul 协议兼容会被历史模型绑死
 
-### 6.2 可以借鉴的接口风格
+### 6.2 可借鉴的风格（细节见 references）
 
-- 从 ZooKeeper 借鉴 watch 与临时节点语义
-- 从 Nacos 借鉴服务/实例/元数据/心跳状态模型
-- 从 Consul 借鉴 agent 模式、prepared query 和健康检查分类
-- 从 gRPC 借鉴 name resolver 风格的地址解析边界
-- 从 Spring Cloud LoadBalancer、Dubbo 借鉴调用方集成体验
+- ZooKeeper：watch、临时节点语义
+- Nacos：服务/实例/元数据/心跳
+- Consul：agent、maintenance、健康分类
+- gRPC name resolver：发现与调用解耦
+- Spring Cloud LoadBalancer / Dubbo：消费侧集成体验
+
+第三方摘要见 [参考资料](./service-registry-references.md)。
 
 ### 6.3 替代与接入路径
 
-替代路径：
+- **替代**：新服务直连 EtDiscovery SDK → `selectOneHealthyInstance` → 原 RPC 栈直连
+- **渐进**：旧治理保留；先替换发现与选择，再替换注册与健康上报
 
-- 新服务直接接入 etdiscovery SDK
-- 调用方通过 `selectOneHealthyInstance` 获取目标地址
-- 原业务协议栈保持不变
-
-接入路径：
-
-- 旧服务仍保留原服务治理体系
-- 新增一个轻量适配层，把业务注册和查询逐步切到 etdiscovery
-- 先替换“发现与选择”，后替换“注册与健康上报”
-
-当前原型对应关系：
-
-- 服务发布配置已切换为 `Services[]`
-- worker 实例注册通过 HTTP 直接完成
-- registry 当前维护内存实例注册表
-- worker 定位 registry 的方式为：
-  - 优先 `RegistryPeer`
-  - 否则回退到首个远端可发现 peer 的 `VirtualIp`
-- `/discovery/services` 与 `/discovery/select` 已可作为最小发现入口
-- 运维和管理端状态控制接口目前仍为占位
-- 读取接口的行为约定是：
-  - 读取 registry 当前内存数据源的瞬时视图
-  - 接受节点状态、实例状态存在少量滞后和短暂不一致
+---
 
 ## 7. 典型框架集成方向
 
 ### 7.1 gRPC
 
-- 可把 etdiscovery 作为 name resolver 或外部地址发现源
-- gRPC channel 继续负责连接池、重试和负载均衡细节
-- etdiscovery 负责提供更适合弱网环境的候选列表
+- 作 name resolver 或外部地址源；channel 仍管连接池/重试
 
-### 7.2 Spring 生态
+### 7.2 Spring
 
-- 可作为 `ServiceInstanceListSupplier` 或等价上游数据源
-- 保持 Spring Cloud LoadBalancer 的调用习惯
-- 避免首版深度侵入 Spring 注册发现抽象
+- `ServiceInstanceListSupplier` 或等价上游；避免首版深度侵入注册抽象
 
 ### 7.3 Dubbo
 
-- 可先接在地址发现或路由规则之前
-- 把 etdiscovery 输出当作候选 provider 列表
-- 不直接复刻 Dubbo 注册中心 SPI
+- 接在地址发现/路由前，输出作候选 provider 列表
 
 ### 7.4 HTTP/TCP 自定义客户端
 
-- 这类接入最直接
-- 业务只需在发起连接前查询一次，或订阅 watch 做本地缓存
+- 发起连接前查询一次，或 watch + 本地缓存
 
-## 8. runtime 应用层协议建议
+---
 
-如果首版采用 sidecar/daemon 为主路径，建议应用层协议具备：
+## 8. 移动端边界
 
-- 查询接口：同步获取候选实例
-- watch 接口：流式接收实例变化
-- 反馈接口：上报调用结果和异常类型
-- 健康接口：注册本地健康检查结果
-- 诊断接口：返回评分拆解、当前缓存和最近路由选择原因
+首版不正式落地移动端 SDK，但模型预留：
 
-建议至少保留两层协议：
+- `network_type`、`battery`、`foreground`、`background_restricted`、`mobile_tun`、`roaming`
 
-- gRPC：主接口
-- HTTP/JSON：调试和运维友好接口
+约束倾向：
 
-当前原型现状：
-
-- 目前只实现了 HTTP/JSON 形态
-- 尚未引入 gRPC sidecar 协议
-- 对业务迁移最有用的最小 HTTP 接口目前包括：
-  - `POST /discovery/instances`
-  - `DELETE /discovery/instances/{instanceId}`
-  - `GET /discovery/instances/{instanceId}`
-  - `GET /discovery/services`
-  - `GET /discovery/select`
-
-补充约束：
-
-- SDK 默认请求本地 runtime，而不是远端 registry
-- runtime 再决定是访问远端 registry、读取本地缓存，还是结合 EasyTier 网络信息作出选择
-- sidecar、daemon、embedded 三种模式应共享同一套语义、错误码和返回模型
-
-## 9. 移动端打包与应用边界
-
-首版结论：
-
-- 不正式落地移动端 SDK
-- 但应用层模型必须提前给移动端留口子
-
-需要预留的字段：
-
-- `network_type`
-- `battery`
-- `foreground`
-- `background_restricted`
-- `mobile_tun`
-- `roaming`
-
-后续打包方向：
-
-- App、SDK、EasyTier core 尽量作为单一安装单元分发
-- EasyTier runtime 生命周期尽量由 SDK 接管
-- 必要时由宿主应用提供 TUN FD 或系统能力桥接
-
-移动端应用层约束：
-
-- 默认作为 `C` 角色
-- 不默认成为服务提供方
-- 断网、切网、后台挂起都应被视为常态，而不是异常
+- 默认偏 `client`，不默认作服务提供方
+- 断网、切网、后台挂起视为常态
+- 后续分发倾向 App + SDK + EasyTier 一体；生命周期由 SDK 或宿主桥接 TUN FD

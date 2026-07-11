@@ -16,186 +16,170 @@
 
 # EasyTier Discovery
 
-EasyTier Discovery (abbreviated in code as `EtDiscovery`) is an application-layer service discovery and instance selection middleware built on top of EasyTier.
+EasyTier Discovery (code name `EtDiscovery`) is an **application-layer service registration, discovery, and instance selection** middleware built on [EasyTier](https://github.com/EasyTier/EasyTier).
 
-This repository is still in a very early prototype stage. The current work is focused on validating one core idea:
+In one line: keep cross-network / NAT / weak-link / heterogeneous nodes connected, then add a control plane for **who offers which service, which instance to call, and who went offline**—**without replacing business RPC**. Think smarter address book + selector.
 
-- keep EasyTier as the network substrate
-- build a discovery and control plane above it
-- expose a service-registry-like API that remains practical in weak-network, NAT, relay, and cross-region environments
+Rough positioning:
 
-## Goals
+| Dimension | Similar to | EtDiscovery focus |
+| --- | --- | --- |
+| Registry / discovery | **Nacos / Consul** | Instance register, resolve, select; instances bound to virtual IPs |
+| Cross-network fabric | **EasyTier** (VPN / P2P / relay) | Reuse overlay + observation; do not reimplement hole punching |
+| Weak-network liveness | **Orleans**-style suspect / multi-observer | Lease + network signals + votes + call feedback (designed / partial) |
+| Runtime & integration | **Dapr** | Thin SDK + local runtime; sidecar / daemon / embedded share one API |
 
-EtDiscovery is intended to become a middleware layer for:
+This repo is still an **early prototype**. Design docs are primarily in Chinese under [`docs/`](./docs/README.md); authoritative progress is [`docs/service-registry-plan.md`](./docs/service-registry-plan.md).
 
-- service registration and deregistration
-- service instance discovery
-- healthy instance selection
-- topology-aware and network-aware routing recommendations
-- application-side feedback collection for later scheduling decisions
+---
 
-The long-term design target is not to replace existing RPC stacks. EtDiscovery is meant to act as:
+## Pain points
 
-- a smarter address book
-- an instance selector
-- a discovery and control-plane integration point for existing business frameworks
+Classic service registries assume a **stable datacenter network** and **homogeneous deploy**. These cases often break that model:
 
-## Features And Progress
+### 1. Steer production traffic to a developer laptop
 
-- ✅ Runtime foundation
-  - ✅ host EasyTier from a .NET web application
-  - ✅ read real node and peer state through `easytier-cli`
-  - ✅ map peer observations into discovery candidates
-- ✅ Service registry
-  - ✅ registry-maintained in-memory service catalog
-  - ✅ worker-driven HTTP registration
-  - ✅ multiple instances per service
-  - ✅ registry nodes that can also act as workers and register local services
-  - ✅ return real registered instances instead of fixed config stubs
-- ✅ Basic selection
-  - ✅ select instances by service name
-  - ✅ support client-side or gateway-side integration of instance selection
-- ✅ Current concurrency model
-  - ✅ one shared in-memory data source
-  - ✅ concurrent updates
-  - ✅ point-in-time snapshot reads
-  - ✅ allow short-lived inconsistencies across reads
-- ⬜ Remaining work
-  - ⬜ lease renewal
-  - ⬜ health updates
-  - ⬜ draining and status override
-  - ⬜ standalone metadata updates
-  - ⬜ node-level management APIs
-  - ⬜ watch streams
-  - ⬜ feedback-driven scheduling and weak-network-aware scoring
-  - ⬜ stable multi-language SDK and integration story
+When debugging a Docker/K8s microservice you want to:
 
-## Current Stage
+- stop (or deprioritize) traffic to the old instance
+- send that service’s traffic to a **process on the developer machine**
+- keep middleware, databases, and dependents reachable
+- let other services successfully call the laptop instance
 
-This project is currently a prototype intended for design validation and early integration discussion.
+The hard part is not “SSH into the cluster”, but treating a **laptop instance as a first-class discovered endpoint** across networks.
 
-What is already working:
+### 2. Heterogeneous services that do not fit the mesh (e.g. Unity / GPU Windows CI)
 
-- EasyTier process hosting from a .NET web app (generated TOML + `easytier-core -c`)
-- reading real EasyTier node/peer/route metadata via `easytier-cli`
-- mapping peer observations into discovery candidates
-- an in-memory registry for registered service instances
-- worker-to-registry HTTP registration
-- registry location via explicit `RegistryCandidates` and EasyTier `node_type_*` route metadata
-- no more fallback that treats the first discoverable remote peer VIP as the registry
-- simplified registry metadata at `GET /discovery/registry`
-- `registry`-side `/discovery/services` and `/discovery/select`
-- `worker`-side self-registration based on `Services[]`
-- config split between `EtDiscovery` and `EasyTier`; role bits cannot be overridden by app config
-- a concurrency model based on one shared in-memory data source with concurrent updates and point-in-time snapshot reads
-- registry↔worker integration validated; fixes applied for default listeners, verbose peer JSON parsing, and registry `ListenUrl` binding
+Some workloads almost only run on **Windows workstations with GPUs** (game CI/CD, etc.). Then:
 
-## Current Assumptions
+- triggering pipelines via git hooks or cron is awkward
+- builders sit outside the DC network and must pull code, push artifacts, and report status across networks
 
-The current prototype assumes:
+The pain: the service **must** live on “nonstandard” nodes but still be discoverable and callable.
 
-- registries must be identified by explicit config or EtDiscovery role metadata; plain peers default to worker
-- registry HTTP must bind an address reachable on the virtual network (prefer `0.0.0.0`, not `127.0.0.1`)
-- service discovery data is eventually consistent
-- short-lived inconsistency between node state and instance state is acceptable
+### 3. Local plugins or human 2FA that cannot run on servers
 
-This means two reads close in time may legitimately return different results.
+Capabilities that need:
 
-## Licensing
+- desktop apps / browser plugins on a real workstation
+- human-in-the-loop 2FA login
 
-This repository is intended to be licensed under `AGPL-3.0-only`. See [LICENSE](./LICENSE).
+cannot be dropped into a server image, yet should still appear as **service instances** to the rest of the system.
 
-Why this choice:
+### 4. Mobile access to home / LAN resources with offline awareness
 
-- the project is middleware intended to run as a network-facing service
-- the goal is to discourage service providers from shipping privately modified, not-fully-compatible middleware forks without publishing the corresponding source
-- a standard, OSI-approved license is preferable to writing custom "AGPL-like" terms
-- `AGPL-3.0-only` is a more widely understood choice than alternatives such as `OSL-3.0`
+Phones need to:
 
-More specifically, the project is trying to express the following policy goal:
+- reach NAS and control home LAN devices
+- know which devices or services are offline
 
-- if someone modifies EasyTier Discovery itself and offers that modified version to third parties as a network service, the corresponding source for those EasyTier Discovery modifications should be available to those users
-- the focus is not an abstract desire that "all SaaS must be open source", but a practical desire to reduce opaque long-lived forks whose incompatibilities and adaptation costs are pushed onto downstream developers and integrators
-- this goal should be expressed through a standard license text, not through custom add-on clauses or vague repository-level wording
+That needs **reachability across NAT plus a service-level online directory**, not only a dumb VPN tunnel.
 
-A representative risk looks like this:
+### 5. Safe debugging of external APIs behind firewall allowlists
 
-- a service provider takes an open middleware project, heavily modifies it, and markets the result as "compatible with" some protocol or system
-- in practice, the compatibility is only partial, but the implementation details of the fork are not published
-- external developers are then forced to spend time adapting around behavior gaps, and the ecosystem gradually fragments around opaque vendor-specific variants
-- this project wants to reduce the room for that outcome as much as possible
+Private clouds or partner APIs often allow only **fixed egress IPs**. Developer home IPs change. Using a stable overlay identity and registry discovery can hang debug entry points on allowlisted nodes or fixed virtual identities, instead of constantly rewriting security policy for each laptop.
 
-The reason to use `AGPL-3.0-only` directly, instead of inventing an "AGPL-like" license, is to avoid two common failure modes:
+---
 
-- custom wording often makes the boundary less clear rather than more clear, because users now have to interpret a non-standard license
-- attempts to make network copyleft "stronger" or "more precise" by adding extra conditions often reduce interoperability, compatibility, and adoption
+## How it works (overview)
 
-At the same time, this README also wants to clarify a few common concerns:
+```text
+                    EasyTier overlay (NAT / P2P / relay)
+  ┌─────────────┐         ┌──────────────┐         ┌─────────────┐
+  │ Dev laptop  │         │ DC / K8s     │         │ Home / mobile│
+  │ worker+app  │◄───────►│ registry…    │◄───────►│ client/device│
+  └─────────────┘         └──────────────┘         └─────────────┘
+         │ register / query catalog (control plane)
+         ▼
+  App gets SelectedInstance, then **direct** HTTP/gRPC/TCP to target virtual IP
+```
 
-- the intended focus is modifications to EasyTier Discovery itself and the deployment of those modifications, not an expansive claim that every independent business system talking to it over the network must automatically be relicensed
-- this README is not meant to impose obligations beyond `AGPL-3.0-only`, and it is not meant to argue for a special interpretation narrower or broader than the actual license text
+- **EasyTier**: network connectivity (VIP, hole punch, relay).
+- **EtDiscovery**: service connectivity (register, discover, select, later weak-network signals).
+- **Business RPC**: still owned by the app client; EtDiscovery does not proxy business traffic.
 
-These notes are provided only to explain the project's licensing intent and rationale. The authoritative legal terms are the license text itself. If you need a formal conclusion for a specific deployment, distribution, or compliance scenario, get legal advice.
+Roles: `registry` (catalog), `worker` (publish), `client` (consume/select). One runtime binary can host different roles by configuration.
 
-## Repository Layout
+---
 
-- `EtDiscovery.Web/`
-  - ASP.NET Core host
-  - EasyTier process management
-  - HTTP APIs
-  - registration orchestrators
-- `EtDiscovery.Core/`
-  - shared discovery models
-  - catalog building
-  - selection policy abstractions
-- `EtDiscovery.Tests/`
-  - unit and integration-oriented test coverage for the prototype
-- `docs/`
-  - design notes
-  - implementation status
-  - external reference material
+## Positioning vs similar systems
 
-## Early Developer Experience
+| System / capability | Strength | Gap vs these scenarios | Relation |
+| --- | --- | --- | --- |
+| **Nacos / Consul / Eureka** | In-DC registry, health, config | Not built for cross-NAT fabric; desktops/home nodes rarely first-class | **Borrow** instance model & register/renew/status split; **no** wire-protocol clone |
+| **EasyTier / classic VPN** | Cross-network reachability | Network only—no service catalog | **Substrate**; discovery on top |
+| **Service mesh** | Transparent traffic policy | Heavy; cluster-centric; costly for desktop/mobile | **No** transparent proxy; stay app-semantic |
+| **Orleans** | Membership suspect, actors | Not a general registry + cross-net VPN | **Borrow** suspect / multi-observer; actors later |
+| **Dapr** | Stable runtime API, many hosts | No EasyTier-class fabric | **Borrow** thin SDK + local runtime + sidecar/daemon |
 
-This is not a production-ready package yet. The current developer workflow is meant for early validation and design iteration.
+So EtDiscovery is **not** “another Nacos”, and **not** “VPN with a UI registry”. It is closer to:
+
+> **Nacos-like registry semantics** + **EasyTier cross-network** + **Orleans-style weak-network observation (roadmap)** + **Dapr-like multi-mode runtime**.
+
+---
+
+## Capabilities
+
+| Capability | Notes | Status (summary) |
+| --- | --- | --- |
+| Register / deregister | Instance bound to VIP; worker reports to registry | Prototype integrated |
+| Discover / select | Resolve by service name; return dialable selection | Minimal path works |
+| Registry bootstrap | `RegistryCandidates` + route `node_type_*` + `GET /discovery/registry` | Integrated |
+| Lease / health / ops status | Separate helper APIs | Placeholders |
+| Watch / call feedback / scoring | Weak-network scheduling inputs | Design / TODO |
+| Multi-language thin SDKs | Node.js / Java / .NET planned | Not started |
+
+Authoritative checklist: [`docs/service-registry-plan.md`](./docs/service-registry-plan.md). Expanded scenarios (Chinese): [`docs/README.md`](./docs/README.md).
+
+---
+
+## Docs and layout
+
+| Entry | Content |
+| --- | --- |
+| **[docs/README.md](./docs/README.md)** | Capability positioning, scenarios, full doc map (Chinese) |
+| [Core design](./docs/service-registry-core-design.md) | Roles, entities, health, scoring |
+| [Application layer / API](./docs/service-registry-application-layer.md) | HTTP/SDK contract, run modes |
+| [Bootstrap](./docs/service-registry-bootstrap-discovery.md) | Finding the registry |
+| [Plan](./docs/service-registry-plan.md) | Progress, limits, next steps |
+| [Runbook](./docs/service-registry-prototype-validation.md) | Start and troubleshoot |
+| [References](./docs/service-registry-references.md) | Third-party summaries |
+
+### Repository layout
+
+- `EtDiscovery.Web/` — ASP.NET host, EasyTier process management, HTTP APIs  
+- `EtDiscovery.Core/` — models and selection policies  
+- `EtDiscovery.Tests/` — unit tests  
+- `docs/` — design, progress, references  
+
+---
+
+## Early developer experience
 
 > [!WARNING]
-> This repository is still in an extremely early stage. APIs, configuration shape, internal behavior, and deployment workflow may change directly without compatibility guarantees.
-> If you integrate with it now, assume that substantial API changes may happen at any time and that there is no stable-version promise or detailed migration notice process yet.
+> Extremely early stage: APIs, config, behavior, and deploy flow may change without compatibility guarantees.
 
 ### 1. Build
-
-From the repository root:
 
 ```powershell
 dotnet build EtDiscovery.Web/EtDiscovery.Web.csproj
 ```
 
-### 2. Configure a Registry
+### 2. Configure registry
 
-Use a config file under `EtDiscovery.Web/` or a published output directory.
+- `--roles registry`
+- **`EtDiscovery:ListenUrl` = `http://0.0.0.0:8080`** (not `127.0.0.1`)
+- Prefer fixed `EasyTier.Ipv4`; empty `Listeners` gets default 11010 ports
+- Role bits are written to EasyTier `node_type_*` and cannot be overridden by app config
 
-Registry-specific notes:
+### 3. Configure worker
 
-- use `roles=registry`
-- **set `EtDiscovery:ListenUrl` to `http://0.0.0.0:8080`** (not `127.0.0.1`, or workers cannot reach the virtual IP)
-- set a fixed virtual IP under `EasyTier.Ipv4`
-- leave `EasyTier.Listeners` empty to get default 11010 listeners in the generated TOML
-- `Services[]` can be empty if the registry is not also a worker
-- role bits are auto-written into EasyTier `node_type_*` metadata and cannot be overridden by app config
+- `--roles worker` + `Services[]`
+- Optional `RegistryCandidates`; if empty, try route-metadata registry discovery
+- `EasyTier.Peers` is join seed only, not the registry list
+- Worker `ListenUrl` may stay loopback-only
 
-### 3. Configure a Worker
-
-Worker-specific notes:
-
-- use `roles=worker`
-- define one or more `Services[]`
-- optionally set `EtDiscovery.RegistryCandidates` (or legacy `RegistryPeer`)
-- if no explicit candidate is set, the worker tries route-metadata peers marked as registry
-- put underlay `Peers` only under `EasyTier` (join seed, not registry list)
-- worker `ListenUrl` may stay loopback-only; registry must not
-
-Example registry config:
+Example registry:
 
 ```json
 {
@@ -216,7 +200,7 @@ Example registry config:
 }
 ```
 
-Example worker config:
+Example worker:
 
 ```json
 {
@@ -248,40 +232,24 @@ Example worker config:
 
 ### 4. Run
 
-Registry:
-
 ```powershell
 dotnet run --project EtDiscovery.Web -- --roles registry
-```
-
-Worker:
-
-```powershell
 dotnet run --project EtDiscovery.Web -- --roles worker
 ```
 
-For more detailed design and implementation notes, start with [`docs/README.md`](./docs/README.md).
+Ops constraints: [plan §3](./docs/service-registry-plan.md#3-当前限制与运维假设), [runbook](./docs/service-registry-prototype-validation.md).
 
-## Status for Contributors
+---
 
-This repository is open for:
+## Contributors
 
-- design discussion
-- prototype iteration
-- API shape review
-- service-registry migration feedback
-- weak-network and topology-aware scheduling discussion
+Useful now: design discussion, prototype iteration, API review, cross-network / heterogeneous scenario feedback.  
+Not ready for: production stability promises, backward compatibility, fixed SDK contracts.
 
-It is not yet ready for:
+---
 
-- stability guarantees
-- backward compatibility guarantees
-- production deployment guidance
-- fixed SDK contracts
+## Licensing
 
-The most useful feedback at this stage is:
+Intended license: `AGPL-3.0-only`. See [LICENSE](./LICENSE).
 
-- service registry API design
-- licensing and contribution model feedback
-- framework integration expectations
-- behavior under unstable peer and virtual-IP conditions
+Rationale in short: network-facing middleware; prefer a **standard** license to discourage opaque incompatible forks of the middleware itself, without inventing custom “AGPL-like” terms. Focus is modifications to EasyTier Discovery when offered as a network service—not relicensing every independent business system that talks to it. README text is intent only; the license text controls.
