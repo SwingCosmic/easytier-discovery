@@ -1,0 +1,12 @@
+**/.git
+**/.vs
+**/bin
+**/obj
+**/*.user
+**/*.DotSettings.user
+**/TestResults
+**/.idea
+docs/**/*.pdf
+EtDiscovery.Tests/
+*.md
+!docker/**

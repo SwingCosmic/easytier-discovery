@@ -1,0 +1,135 @@
+# Sample only — validate on a real Linux Kubernetes cluster.
+# Prerequisites:
+# - Node has /dev/net/tun (tun module loaded)
+# - Pod can use NET_ADMIN (and often privileged or SYS_ADMIN depending on CNI)
+# - kube-proxy running in iptables or ipvs kernel mode so underlay/Service traffic works;
+#   EasyTier VIP is overlay L3 — confirm peer VIP reachability between pods/nodes separately
+# - Replace image, secrets, and network identity before apply
+#
+# kubectl apply -f docker/k8s/registry-sample.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: etdiscovery-registry-config
+data:
+  appsettings.json: |
+    {
+      "EtDiscovery": {
+        "Mode": "embedded",
+        "NetworkName": "etd-k8s",
+        "NetworkSecret": "change-me-secret",
+        "VirtualNetworkCidr": "10.1.1.0/24",
+        "ListenUrl": "http://0.0.0.0:8080",
+        "DiscoveryPort": 8080,
+        "AutoDiscoverFromRouteMetadata": true,
+        "RegistryCandidates": [],
+        "Services": [],
+        "RefreshIntervalSeconds": 5
+      },
+      "EasyTier": {
+        "CorePath": "/usr/local/bin/easytier-core",
+        "CliPath": "/usr/local/bin/easytier-cli",
+        "InstanceName": "registry-k8s",
+        "Ipv4": "10.1.1.1",
+        "Dhcp": false,
+        "Peers": [],
+        "Listeners": [],
+        "Hostname": "registry-k8s"
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etdiscovery-registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etdiscovery-registry
+  template:
+    metadata:
+      labels:
+        app: etdiscovery-registry
+    spec:
+      hostNetwork: false
+      containers:
+        - name: etdiscovery
+          image: etdiscovery:local
+          imagePullPolicy: IfNotPresent
+          args: []
+          env:
+            - name: ETDISCOVERY_ROLES
+              value: registry
+            # Required mode (cluster registry: embedded only).
+            # daemon != K8s DaemonSet; workers use sidecar|daemon.
+            - name: ETDISCOVERY_MODE
+              value: embedded
+            - name: ETDISCOVERY_CONFIG_FILE
+              value: /config/appsettings.json
+            # Optional overrides without editing ConfigMap:
+            # - name: EtDiscovery__NetworkName
+            #   value: etd-k8s
+            # - name: EasyTier__Ipv4
+            #   value: "10.1.1.1"
+          ports:
+            - name: discovery
+              containerPort: 8080
+            - name: et-tcp
+              containerPort: 11010
+              protocol: TCP
+            - name: et-udp
+              containerPort: 11010
+              protocol: UDP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: tun
+              mountPath: /dev/net/tun
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: discovery
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: discovery
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: config
+          configMap:
+            name: etdiscovery-registry-config
+        - name: tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etdiscovery-registry
+spec:
+  selector:
+    app: etdiscovery-registry
+  ports:
+    - name: discovery
+      port: 8080
+      targetPort: discovery
+    - name: et-tcp
+      port: 11010
+      targetPort: et-tcp
+      protocol: TCP
+    - name: et-udp
+      port: 11010
+      targetPort: et-udp
+      protocol: UDP
