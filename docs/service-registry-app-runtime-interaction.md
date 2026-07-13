@@ -59,7 +59,7 @@
 - **含 `registry`**：mode 仅 `daemon` 或 `embedded`；**集群（K8s）registry 使用 `embedded`**。  
 - **互调**：runtime `--roles worker,client`。
 
-### 3.3 生命周期（摘要）
+### 3.3 生命周期
 
 | 事件 | `daemon` | `sidecar` | `embedded` |
 | --- | --- | --- | --- |
@@ -112,11 +112,19 @@
 
 ---
 
-## 6. 存活（ActiveHeartbeat）
+## 6. 存活 ActiveHeartbeat
 
-```text
-App/SDK:  register → 周期 heartbeat → 下线 deregister
-Runtime:  收到 heartbeat 则刷新 TTL 并 renew 控制面；TTL 过期则停 renew / Unhealthy
+```mermaid
+sequenceDiagram
+  participant App as App / SDK
+  participant RT as Runtime
+  App->>RT: register
+  loop 周期 heartbeat
+    App->>RT: heartbeat
+    Note over RT: 刷新 TTL 并 renew 控制面
+  end
+  App->>RT: deregister
+  Note over RT: TTL 过期则停 renew / Unhealthy
 ```
 
 | 参数 | 建议 |
@@ -167,13 +175,17 @@ Runtime:  收到 heartbeat 则刷新 TTL 并 renew 控制面；TTL 过期则停 
 
 | 项目 | 产出 | 职责 |
 | --- | --- | --- |
-| `EtDiscovery.Contracts` | Shared Project（无 DLL） | 线缆/业务可见模型（namespace `EtDiscovery.Core.Models`） |
+| `EtDiscovery.Contracts` | Shared Project，无 DLL | 线缆/业务可见模型，namespace `EtDiscovery.Core.Models` |
 | `EtDiscovery.Core` | DLL | 引擎、策略、进程内抽象、宿主元数据 |
 | `EtDiscovery.Sdk` | DLL | 本地 runtime HTTP 客户端 + DI/心跳 |
 | `EtDiscovery.Web` | 宿主 | 控制面、bootstrap、mode 与 EasyTier、目录 |
 
-```text
-[业务 App] → EtDiscovery.Sdk → EtDiscovery.Web → Core 引擎 +（按 mode）EasyTier
+```mermaid
+flowchart LR
+  App["业务 App"] --> Sdk["EtDiscovery.Sdk"]
+  Sdk --> Web["EtDiscovery.Web"]
+  Web --> Core["Core 引擎"]
+  Web -.->|"按 mode"| ET["EasyTier"]
 ```
 
 业务 **只引用 Sdk**。
@@ -204,7 +216,7 @@ app.UseEtDiscovery();
 
 ## 9. 角色 × mode 与经典部署
 
-图例：**推荐** / **注意** / **不可用**（文档约束，代码不校验组合）。
+图例：**推荐** / **注意** / **不可用**。表中为文档约束，代码不校验角色与 mode 组合。
 
 ### 9.1 常用组合
 
@@ -236,11 +248,16 @@ app.UseEtDiscovery();
 
 ### 9.4 Daemon 同 NS 互调形状
 
-```text
-  EasyTier (外置)          VIP = 10.x.x.N
-  EtDiscovery --mode daemon --roles worker,client
-  AppA:P1  AppB:P2
-  App → SDK → /runtime/v1/select → 业务直连 VIP:port
+```mermaid
+flowchart TB
+  ET["EasyTier 外置"] --> VIP["VIP 10.x.x.N"]
+  ETD["EtDiscovery<br/>mode=daemon · roles=worker,client"]
+  AppA["AppA:P1"]
+  AppB["AppB:P2"]
+  AppA --> SDK["SDK"]
+  AppB --> SDK
+  SDK --> Select["GET /runtime/v1/select"]
+  Select --> Direct["业务直连 VIP:port"]
 ```
 
 ---

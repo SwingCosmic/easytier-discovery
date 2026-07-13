@@ -12,7 +12,7 @@ They do **not** implement cross-service business calls. That comes after local `
 1. Local EtDiscovery runtime listening at `http://127.0.0.1:8081` with `worker,client` (and EasyTier per mode rules).  
 2. Runtime exposes `/runtime/v1/*` (not required just to **build** these projects).
 
-## Run (structure only)
+## Run
 
 ```bash
 dotnet run --project examples/EtDiscovery.Examples.ServiceA
@@ -21,7 +21,7 @@ dotnet run --project examples/EtDiscovery.Examples.ServiceB
 
 Probe integration:
 
-```text
+```http
 GET http://127.0.0.1:9001/health
 GET http://127.0.0.1:9001/discovery/self
 GET http://127.0.0.1:9001/discovery/client

@@ -24,8 +24,8 @@ EasyTier Discovery（代码内简称 `EtDiscovery`）是构建在 [EasyTier](htt
 | 维度 | 可类比 | EtDiscovery 侧重点 |
 | --- | --- | --- |
 | 服务注册 / 发现 | **Nacos / Consul** | 实例注册、解析、选择；实例绑定虚拟 IP |
-| 跨网互联底座 | **EasyTier**（VPN/P2P/relay） | 不重做打洞与路由，复用 overlay 与观测 |
-| 弱网存活与分布式观察 | **Orleans** 风格 suspect / 多观察者 | 租约 + 网络信号 + 投票 + 调用反馈（设计中） |
+| 跨网互联底座 | **EasyTier**，VPN / P2P / relay | 不重做打洞与路由，复用 overlay 与观测 |
+| 弱网存活与分布式观察 | **Orleans** 风格 suspect / 多观察者 | 租约 + 网络信号 + 投票 + 调用反馈；设计中 |
 | 运行与接入形态 | **Dapr** | 薄 SDK + 本地 runtime；sidecar / daemon / embedded 同一套 API |
 
 当前仓库仍是 **早期原型**：设计与最小联调并行，接口与配置可能无兼容性承诺地变更。更细的能力与场景见 [`docs/README.md`](./docs/README.md)，进度见 [`docs/service-registry-plan.md`](./docs/service-registry-plan.md)。
@@ -80,29 +80,47 @@ EasyTier Discovery（代码内简称 `EtDiscovery`）是构建在 [EasyTier](htt
 
 ---
 
-## 它怎么工作（通读版）
+## 如何工作
 
-```text
-                    EasyTier 虚拟网络（跨 NAT / P2P / relay）
-  ┌─────────────┐         ┌──────────────┐         ┌─────────────┐
-  │  开发本机     │         │  机房 / K8s   │         │  家宽 / 移动  │
-  │ worker+业务  │◄───────►│ registry 等  │◄───────►│  client/设备  │
-  └─────────────┘         └──────────────┘         └─────────────┘
-         │ 注册 / 查询实例目录（控制面）
-         ▼
-  业务进程拿到 SelectedInstance 后，用自己的 HTTP/gRPC/TCP **直连** 目标虚拟 IP
+网络面与服务面是 **正交能力面**：节点可只参与组网、只做服务目录、或两者兼有；**不是**「VPN 内嵌注册中心」。
+
+> Mermaid **不支持**同一个节点同时落在多个框里。因此下图用 **三个互斥分组框** 按落点归类，**节点标签写清能力**；连线表示通信。
+
+```mermaid
+flowchart TB
+  subgraph netOnly["仅组网 · 无服务角色"]
+    Relay["relay / 入网种子<br/>只跑 EasyTier"]
+  end
+
+  subgraph both["入网 + 服务角色 · 常见"]
+    direction LR
+    RegFull["registry-全集群<br/>组网 · registry · observer"]
+    Dev["开发本机<br/>组网 · worker · client"]
+    Consumer["消费端<br/>组网 · client"]
+  end
+
+  subgraph svcOnly["可仅服务面 · 不入虚拟网"]
+    RegPub["registry-公网<br/>仅 registry 控制面"]
+  end
+
+  Relay <-->|"EasyTier"| RegFull
+  RegFull <-->|"EasyTier"| Dev
+  Dev <-->|"EasyTier"| Consumer
+
+  Dev -->|"注册 / 续约"| RegFull
+  Consumer -->|"select / 查询"| RegFull
+  Dev -.->|"可选：控制面走公网"| RegPub
+  Consumer -->|"业务 RPC 直连<br/>VIP 或其它可达地址"| Dev
 ```
 
-- **EasyTier**：负责“网通了”（虚拟 IP、打洞、relay）。
-- **EtDiscovery**：负责“服务通了”（注册、发现、选择、后续的弱网调度信号）。
-- **业务 RPC**：仍由应用自己的客户端发起，EtDiscovery 不代理业务流量。
+| 分组框 | 含义 |
+| --- | --- |
+| **仅组网** | 参与虚拟网，不承担 registry / worker / client |
+| **入网 + 服务角色** | 同一节点既在 EasyTier 上，又带目录或业务角色；registry 入网才能稳定观察 peer/route |
+| **可仅服务面** | 例如 registry **只暴露公网控制面**；目录可达，但不入网则难以作 overlay observer |
 
-角色（详见设计文档）：
-
-- `registry`：目录与控制面
-- `worker`：服务提供方本地发布
-- `client`：消费方本地发现与选择  
-同一 runtime 可按配置承载不同角色（也可组合）。
+- **EasyTier**：网通了。**EtDiscovery**：服务通了。业务 RPC 由应用直连，**不**经 EtDiscovery 代理。  
+- 角色可组合；**是否入网由部署决定，不由角色名隐含**。
 
 ---
 
@@ -111,20 +129,20 @@ EasyTier Discovery（代码内简称 `EtDiscovery`）是构建在 [EasyTier](htt
 | 系统 / 能力 | 擅长 | 相对缺口 | EtDiscovery 关系 |
 | --- | --- | --- | --- |
 | **Nacos / Consul / Eureka** | 数据中心内注册发现、健康、配置 | 默认不解决跨 NAT 组网；异构桌面/家宽节点难成一等公民 | **借鉴**实例模型与注册/续租/状态拆分；**不**做线协议兼容 |
-| **EasyTier / 传统 VPN** | 跨网互通 | 只有网络层，没有服务级目录与选择 | **复用**为底座；其上叠 discovery |
+| **EasyTier / 传统 VPN** | 跨网互通 | 只有网络层，没有服务级目录与选择 | **复用**网络面；服务面与之正交相交，非内嵌 |
 | **Service Mesh** | 透明流量治理 | 重、偏集群内；弱网/桌面/移动成本高 | **不**做透明代理；更贴近应用语义 |
 | **Orleans** | 成员怀疑、Actor 分布 | 不是通用服务注册中心 + 跨网 VPN | **借鉴** suspect / 多观察者与后续 Actor 扩展 |
 | **Dapr** | 稳定 runtime API + 多种部署形态 | 不提供 EasyTier 级跨网底座 | **借鉴**“薄 SDK + 本地 runtime + sidecar/daemon” |
 
 因此 EtDiscovery **不是**“又一个 Nacos”，也 **不是**“带注册中心的 VPN 面板”，而是：
 
-> **Nacos 式注册发现语义** + **EasyTier 跨网互联** + **Orleans 风格弱网观察（规划）** + **Dapr 式多运行模式接入**。
+> **Nacos 式注册发现语义** + **EasyTier 跨网互联** + **Orleans 风格弱网观察**（规划中）+ **Dapr 式多运行模式接入**。
 
 ---
 
 ## 能力一览
 
-| 能力 | 说明 | 状态（摘要） |
+| 能力 | 说明 | 状态 |
 | --- | --- | --- |
 | 服务注册 / 下线 | 实例绑定虚拟 IP，worker 上报 registry | 原型已联调 |
 | 服务发现 / 选择 | 按服务名解析；`select` 返回可直连信息 | 最小路径可用 |
@@ -133,32 +151,41 @@ EasyTier Discovery（代码内简称 `EtDiscovery`）是构建在 [EasyTier](htt
 | Watch / 调用反馈 / 弱网评分 | 支撑不稳定网络下的调度 | 设计中 |
 | 多语言薄 SDK | 首版规划 Node.js / Java / .NET | 未做 |
 
-权威进度与运维限制：[`docs/service-registry-plan.md`](./docs/service-registry-plan.md)。
+进度清单：[`docs/service-registry-plan.md`](./docs/service-registry-plan.md)。
 
 ---
 
-## 文档与仓库导航
+## 开源协议
+
+当前计划将本仓库采用 `AGPL-3.0-only` 协议开源，详见 [LICENSE](./LICENSE)。
+
+**协议选择：** 作为面向网络服务的中间件，选用标准、成熟的 `AGPL-3.0-only`（相对 `OSL-3.0` 等更易被基础设施场景接受），以约束服务提供方对内核做不完全兼容的定制分叉却不公开源码；直接采用标准文本而非自定义 “AGPL-like” 条款，避免边界更模糊或叠加额外条件损害通用性与可接受度。
+
+**诉求与风险：** 若有人修改 EasyTier Discovery **本身**并以**网络服务**向第三方提供修改版，应对相应用户开放这些修改的源码。重点不是“所有 SaaS 都必须开源”，而是尽量避免服务提供方或云侧长期维护**不透明定制分叉**：对外宣称“兼容某协议”或“等价替代”，实际兼容却不完整，适配成本被转嫁给开发者与集成方，最终造成生态割裂。该诉求应通过标准协议文本实现，而非 README 自定义补充条款。
+
+**常见顾虑澄清**
+
+- 本项目希望约束的是对 EasyTier Discovery **自身**的修改与部署，而不是把“任何与之通过网络交互的独立业务系统”都扩大解释为必须整体改用同一协议。
+- 本项目不打算通过 README 增加超出 `AGPL-3.0-only` 文本之外的新义务，也不打算在文档中主张一种比协议正文更宽或更窄的特殊解释。
+
+因此，README 中的这些说明仅用于表达项目的许可选择动机和设计意图；**真正具有法律效力的内容始终以协议文本本身为准**。如需针对具体部署、分发或合规场景获得正式结论，应咨询专业法律意见。
+
+---
+
+## 文档导航
 
 | 入口 | 内容 |
 | --- | --- |
-| **[docs/README.md](./docs/README.md)** | 能力定位、场景展开、完整文档目录（建议通读后继续深入） |
-| [核心设计](./docs/service-registry-core-design.md) | 角色/能力、实体、健康状态机、评分与选择 |
-| [应用层与 API](./docs/service-registry-application-layer.md) | HTTP/SDK 契约、运行模式、框架集成 |
-| [Bootstrap](./docs/service-registry-bootstrap-discovery.md) | 如何自动找到 registry |
-| [阶段计划](./docs/service-registry-plan.md) | 进度、限制、下一步（唯一状态源） |
+| **[AGENTS.md](./AGENTS.md)** | 代码结构、改逻辑入口、硬约定 |
+| **[docs/README.md](./docs/README.md)** | 能力定位、场景、设计文档目录 |
+| [核心设计](./docs/service-registry-core-design.md) | 角色/实体/健康/选择 |
+| [应用层与 API](./docs/service-registry-application-layer.md) | HTTP/SDK、运行模式 |
+| [Bootstrap](./docs/service-registry-bootstrap-discovery.md) | 如何找到 registry |
+| [阶段计划](./docs/service-registry-plan.md) | 进度与下一步，唯一状态源 |
 | [原型 Runbook](./docs/service-registry-prototype-validation.md) | 启动与排查 |
-| [参考资料](./docs/service-registry-references.md) | 第三方系统摘要 |
+| [参考资料](./docs/service-registry-references.md) | 第三方摘要 |
 
-### 仓库结构
-
-- `EtDiscovery.Contracts/` — Shared Project：线缆/业务可见模型（编入 Core 与 Sdk）
-- `EtDiscovery.Core/` — 引擎与宿主内部逻辑
-- `EtDiscovery.Sdk/` — 业务薄客户端（`AddEtDiscovery` / `UseEtDiscovery`）
-- `EtDiscovery.Web/` — ASP.NET Core 宿主、EasyTier 进程管理、HTTP Controllers
-- `EtDiscovery.Tests/` / `EtDiscovery.Sdk.Tests/` — 单元测试
-- `examples/` — ServiceA/B 仅 SDK 接入骨架（无跨服务业务调用）
-- `Dockerfile` / `docker/` — Linux 镜像、entrypoint、K8s ConfigMap 样例
-- `docs/` — 设计、进度与参考资料
+仓库目录与模块职责见 [AGENTS.md §2](./AGENTS.md#2-项目结构)。
 
 ---
 
@@ -173,19 +200,12 @@ EasyTier Discovery（代码内简称 `EtDiscovery`）是构建在 [EasyTier](htt
 dotnet build EtDiscovery.Web/EtDiscovery.Web.csproj
 ```
 
-### 2. 配置 Registry
+### 2. 配置要点
 
-- `--roles registry`
-- **`EtDiscovery:ListenUrl` 使用 `http://0.0.0.0:8080`**（不要用 `127.0.0.1`）
-- 建议固定 `EasyTier.Ipv4`；`Listeners` 可留空（生成默认 11010）
-- 角色自动写入 EasyTier `node_type_*`，不可配置覆盖
-
-### 3. 配置 Worker
-
-- `--roles worker` + `Services[]`
-- 可选 `RegistryCandidates`；为空则尝试 route metadata 发现 registry
-- `EasyTier.Peers` 只用于入网，不是 registry 列表
-- worker 的 `ListenUrl` 可只绑本机
+- 必须提供 `--roles`：`registry` / `worker` / `client`，可组合
+- Registry：`ListenUrl` 需对虚拟网可达，如 `http://0.0.0.0:8080`；建议固定 `EasyTier.Ipv4`
+- Worker：`Services[]`；可选 `RegistryCandidates`，为空则尝试 route 发现；`EasyTier.Peers` 仅入网种子
+- 其它硬约定见 [AGENTS.md §3](./AGENTS.md#3-代码与行为硬约定)，含 listeners、权限、角色元数据等
 
 Registry 示例：
 
@@ -238,27 +258,25 @@ Worker 示例：
 }
 ```
 
-### 4. 运行
+### 3. 运行
 
 ```powershell
 dotnet run --project EtDiscovery.Web -- --roles registry
 dotnet run --project EtDiscovery.Web -- --roles worker
 ```
 
-### 5. 容器（真实 Linux / 优先 K8s）
+### 4. 容器
+
+优先真实 Linux 与 Kubernetes。
 
 ```bash
-cd etdiscovery
+# 在本仓库根目录
 docker build -t etdiscovery:local .
-# 角色与模式：ETDISCOVERY_ROLES、ETDISCOVERY_MODE（镜像默认 embedded；取值 sidecar|daemon|embedded）
-# 配置：ETDISCOVERY_CONFIG_FILE 或挂载 /config/appsettings.json（运维配置面）
-# 需要 /dev/net/tun 与 NET_ADMIN；集群侧 kube-proxy 使用内核代理以便 underlay 正常
+# ETDISCOVERY_ROLES 必填；ETDISCOVERY_MODE 默认 embedded
+# 配置：ETDISCOVERY_CONFIG_FILE 或挂载 /config/appsettings.json
 ```
 
-样例清单：`docker/k8s/registry-sample.yaml`。详细步骤见 [原型 Runbook §4.3](./docs/service-registry-prototype-validation.md#43-docker--kubernetes真实-linux)。
-
-运维硬约束与排查：[`docs/service-registry-plan.md`](./docs/service-registry-plan.md#3-当前限制与运维假设)、[`docs/service-registry-prototype-validation.md`](./docs/service-registry-prototype-validation.md)。  
-业务进程与本地 runtime 契约：[`docs/service-registry-app-runtime-interaction.md`](./docs/service-registry-app-runtime-interaction.md)。
+样例：`docker/k8s/registry-sample.yaml`。启动与排查见 [Runbook](./docs/service-registry-prototype-validation.md)；业务 ↔ runtime 契约见 [交互文档](./docs/service-registry-app-runtime-interaction.md)。
 
 ---
 
@@ -268,11 +286,3 @@ docker build -t etdiscovery:local .
 不适合期望：生产稳定性、向后兼容、固定 SDK 契约。
 
 有价值的反馈：注册发现 API 形态、框架集成预期、虚拟 IP 变化与节点不稳时的行为、许可证与贡献模式。
-
----
-
-## 开源协议
-
-计划采用 `AGPL-3.0-only`，详见 [LICENSE](./LICENSE)。
-
-选择动机简述：面向网络服务的中间件，希望用 **标准协议** 约束对内核的不透明定制分叉，而不是自定义“类 AGPL”条款。约束重点是 **对 EasyTier Discovery 自身的修改与网络提供**，而非把任意对接的业务系统扩大解释为必须同一协议。README 中的说明仅表达意图；法律效力以协议正文为准。

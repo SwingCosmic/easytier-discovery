@@ -2,7 +2,8 @@
 
 本文档是 **当前进度、已知限制、临时假设与阶段计划** 的唯一权威来源。  
 目标设计见 [核心设计](./service-registry-core-design.md)、[应用层与集成](./service-registry-application-layer.md)、[Registry Bootstrap Discovery](./service-registry-bootstrap-discovery.md)。  
-原型启动与平台排查见 [原型验证 runbook](./service-registry-prototype-validation.md)。
+原型启动与平台排查见 [原型验证 runbook](./service-registry-prototype-validation.md)。  
+**改代码时的模块入口与实现约定**见根目录 [AGENTS.md](../AGENTS.md)（不在此维护项目树）。
 
 ---
 
@@ -105,29 +106,10 @@
 
 ## 3. 当前限制与运维假设
 
-### 3.1 必须遵守的运维约束
+实现与联调硬约束摘要统一维护在 [AGENTS.md §3](../AGENTS.md#3-代码与行为硬约定)，含 ListenUrl、listeners、角色元数据、权限、DHCP、RegistryCandidates 等。
+启动步骤与观测字段见 [runbook](./service-registry-prototype-validation.md)。
 
-1. **registry 的 `EtDiscovery:ListenUrl` 必须对虚拟网可达**  
-   - 正确：`http://0.0.0.0:8080`  
-   - 错误：`http://127.0.0.1:8080`（只绑回环，worker 经 VIP 访问会超时）  
-   - 启动时会校验并禁止 loopback。
-2. **生成的 EasyTier TOML 必须有 listeners**  
-   - `Listeners` 为空时写入默认 11010 系；否则公网 peer 可能无法入网。
-3. **角色元数据不可手写**  
-   - 只由 `--roles` 推导 `node_type_app_id` / `node_type_flags`。
-4. **Windows 提权**  
-   - 需要本机 VIP/DHCP 时用 `EtDiscovery.Web.exe`（嵌入 manifest）启动；`dotnet xxx.dll` 不会 UAC。
-5. **实例名**  
-   - registry / worker 建议不同 `EasyTier:InstanceName`，避免同机 CLI `-n` 混淆。
-
-### 3.2 平台与网络
-
-- Windows：需要本机虚拟 IP 时通常要管理员权限（registry / 静态 `Ipv4` / DHCP 均如此）。
-- Linux：需要本机虚拟 IP 时须 TUN 可用（root 或 `/dev/net/tun`）。
-- `worker + dhcp` 表示 EasyTier 自动分配虚拟 IP，**不是**“registry 当传统 DHCP 服务器”。
-- 较稳妥验证路径：registry 固定 `EasyTier.Ipv4` + `ListenUrl=0.0.0.0:8080`；worker 先 DHCP，不稳则写死 VIP。
-
-### 3.3 联调中已修问题（备忘）
+### 3.1 联调已修问题（备忘，防回归）
 
 | 现象 | 根因 | 处理 |
 | --- | --- | --- |
@@ -135,13 +117,10 @@
 | `routeMetadataCandidates=0` | `peer list -v` 中 `ipv4_addr.address` 是对象不是 string | route DTO 忽略嵌套地址，只读 `peer_id` / `hostname` / `node_type_*` |
 | 访问 `http://10.x.x.x:8080` 超时 | registry 只绑 `127.0.0.1` | 强制非 loopback `ListenUrl` |
 
-更细的启动步骤与排查字段见 [原型验证 runbook](./service-registry-prototype-validation.md)。
+### 3.2 配置迁移（进度相关）
 
-### 3.4 配置迁移说明
-
-- 显式 registry 列表字段名为 **`RegistryCandidates`**。
-- 旧名 `RegistryPeer` 仅过渡兼容，**下次调整将移除**；新配置请只写 `RegistryCandidates`。
-- 不要再文档或配置中使用 `/.well-known/etdiscovery`；registry 元数据路径为 **`GET /discovery/registry`**。
+- 显式 registry 列表：**`RegistryCandidates`**；旧名 `RegistryPeer` 过渡兼容，**计划移除**。  
+- Registry 元数据路径：**`GET /discovery/registry`**（勿再用 `/.well-known/etdiscovery`）。
 
 ---
 

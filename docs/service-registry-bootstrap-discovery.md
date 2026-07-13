@@ -1,7 +1,7 @@
 # Registry Bootstrap Discovery
 
 本文档描述 worker/client 在加入 EasyTier 网络后 **如何自动定位 registry** 的目标设计。  
-实现进度、运维限制与联调备忘见 [实施方案](./service-registry-plan.md)；启动排查见 [原型验证 runbook](./service-registry-prototype-validation.md)。  
+实现进度与联调回归见 [plan](./service-registry-plan.md)；硬约定见 [AGENTS.md](../AGENTS.md)；启动排查见 [runbook](./service-registry-prototype-validation.md)。  
 完整应用层 API 表见 [应用层与集成](./service-registry-application-layer.md#4-应用层-api)。
 
 ---
@@ -47,12 +47,12 @@
 
 优先使用 EasyTier `node_type_flags` / `node_type_app_id` 定位候选，而不是对所有 peer VIP 做 HTTP 扫描。
 
-```text
-node_type_app_id = 1: EtDiscovery
-bit 16: registry
-bit 17: worker
-bit 18: client
-```
+| 字段 / 位 | 含义 |
+| --- | --- |
+| `node_type_app_id = 1` | EtDiscovery |
+| bit 16 | registry |
+| bit 17 | worker |
+| bit 18 | client |
 
 规则：
 
@@ -179,7 +179,7 @@ sequenceDiagram
 
 EtDiscovery runtime 生成临时 TOML（含 `node_type_*`、network identity、peers、listeners 等），然后：
 
-```text
+```bash
 easytier-core -c <generated.toml> --rpc-portal <allocated>
 ```
 

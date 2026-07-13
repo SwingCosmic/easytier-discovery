@@ -1,7 +1,12 @@
 # EasyTier Discovery 设计文档
 
-本文是 `docs/` 的详细入口：说明 **能力定位**、**使用场景**，并给出完整文档目录。  
-面向“已决定深入设计”的读者；若只想快速了解项目痛点与定位，先读仓库根目录 [README.md](../README.md)。
+本文是 `docs/` 的 **产品 / 架构** 入口：能力定位、使用场景、设计文档地图。  
+
+| 你想… | 去哪 |
+| --- | --- |
+| 快速了解痛点与上手 | 根 [README.md](../README.md) |
+| **改代码、找模块、遵守实现约定** | 根 [AGENTS.md](../AGENTS.md)，与本文视角不同 |
+| 深入设计与 API 语义 | 下文目录 |
 
 ---
 
@@ -9,7 +14,7 @@
 
 ### 1.1 一句话
 
-在 EasyTier 提供的 **跨 NAT / 弱网 / 异构节点 overlay** 上，增加 **服务注册、发现、实例选择与（规划中的）弱网调度信号**，让业务在现有 HTTP/gRPC/TCP 栈上直连正确的实例。
+在 EasyTier 提供的 **跨 NAT / 弱网 / 异构节点 overlay** 上，增加 **服务注册、发现、实例选择与弱网调度信号**（后者规划中），让业务在现有 HTTP/gRPC/TCP 栈上直连正确的实例。
 
 ### 1.2 分层
 
@@ -29,7 +34,7 @@
 | Actor 类扩展 | Orleans placement（长期） | 仅预留方向，非首版闭环；见 [open questions](./service-registry-open-questions.md) |
 | 运行模式 | Dapr | sidecar / daemon / embedded / 无 SDK HTTP；见 [应用层 §2](./service-registry-application-layer.md#2-运行模式与-sdk-边界) |
 
-### 1.4 能力清单（产品视角）
+### 1.4 能力清单
 
 | 能力 | 说明 |
 | --- | --- |
@@ -39,8 +44,8 @@
 | Registry 自动发现 | 入网后不必写死 registry 公网 IP：配置候选 + route 角色元数据 + `GET /discovery/registry` |
 | 节点角色元数据 | `registry` / `worker` / `client` 等经 EasyTier `node_type_*` 传播，避免“第一个 peer 就是注册中心” |
 | 弱网友好读取语义 | 瞬时快照、最终一致；不为强一致牺牲可用性（见 plan） |
-| 调用反馈与评分（规划） | 延迟、错误类型、链路质量进入选择 |
-| 多语言接入（规划） | 薄 SDK 调本地 runtime，不把核心逻辑复制到各语言 |
+| 调用反馈与评分 | 延迟、错误类型、链路质量进入选择；规划中 |
+| 多语言接入 | 薄 SDK 调本地 runtime，不把核心逻辑复制到各语言；规划中 |
 
 **明确非目标：**
 
@@ -51,17 +56,19 @@
 
 实现进度以 [实施方案](./service-registry-plan.md) 为准。
 
-### 1.5 最小闭环（逻辑）
+### 1.5 最小闭环
 
-```text
-[registry]  ←注册/查询←  [worker 或 client runtime]  ←薄 SDK←  [业务进程]
-                              ↕ EasyTier overlay
-业务 RPC：consumer ──直连 virtual_ip:port / recommended_endpoint──> provider
+```mermaid
+flowchart LR
+  Biz["业务进程"] -->|"薄 SDK"| Runtime["worker / client runtime"]
+  Runtime -->|"注册 / 查询"| Registry["registry"]
+  Runtime <-.->|"EasyTier overlay"| Registry
+  Consumer["consumer"] -->|"业务 RPC 直连<br/>VIP:port / recommended_endpoint"| Provider["provider"]
 ```
 
 ---
 
-## 2. 使用场景（展开）
+## 2. 使用场景
 
 下列场景是产品动机，也是设计取舍的依据。细节实现阶段不同；标了“依赖规划能力”的部分见 plan。
 
@@ -79,9 +86,9 @@
 **EtDiscovery 贡献：** 跨网身份 + 服务级注册发现，而不是“只 VPN 进内网却没有服务目录”。  
 **相关文档：** [应用层](./service-registry-application-layer.md)、[Bootstrap](./service-registry-bootstrap-discovery.md)、[核心设计·选择](./service-registry-core-design.md)。
 
-### 2.2 异构架构上的特殊服务（如 Unity / GPU Windows CI）
+### 2.2 异构架构上的特殊服务
 
-**背景：** 构建或渲染必须在带显卡的 Windows 工作站；难以塞进标准 Linux agent 池。
+**背景：** 构建或渲染必须在带显卡的 Windows 工作站，如 Unity / GPU CI；难以塞进标准 Linux agent 池。
 
 **期望：**
 
@@ -142,7 +149,7 @@
 
 ## 3. 文档目录
 
-### 3.1 设计主线（建议顺序）
+### 3.1 设计主线
 
 | 顺序 | 文档 | 读什么 |
 | --- | --- | --- |
@@ -156,53 +163,46 @@
 
 | 文档 | 读什么 |
 | --- | --- |
-| [实施方案与阶段计划](./service-registry-plan.md) | **唯一**进度源；接口已实现/占位；运维限制与假设；阶段与下一步 |
+| [实施方案与阶段计划](./service-registry-plan.md) | **唯一**进度源；接口已实现/占位；阶段与下一步 |
 | [原型验证 Runbook](./service-registry-prototype-validation.md) | Windows/Linux 启动、权限、排查字段与推荐路径 |
-| [待讨论问题](./service-registry-open-questions.md) | 未冻结分歧（语言形态、registry 职责上限、评分可配置度等） |
+| [待讨论问题](./service-registry-open-questions.md) | 未冻结分歧：语言形态、registry 职责上限、评分可配置度等 |
 
-### 3.3 参考资料（第三方摘要，非本仓库定稿）
+### 3.3 参考资料
+
+第三方摘要，非本仓库定稿。
 
 | 文档 | 读什么 |
 | --- | --- |
-| [参考资料索引](./service-registry-references.md) | 目录与维护约定 |
+| [参考资料索引](./service-registry-references.md) | 第三方摘要目录 |
 | [EasyTier 可复用能力](./service-registry-references/easytier-capabilities.md) | 网络/NAT/relay/观测/嵌入能力清单 |
 | [外部系统概览](./service-registry-references/external-systems-overview.md) | ZooKeeper / Nacos / Consul / Eureka / K8s / Orleans |
 | [应用层接口风格](./service-registry-references/application-integration-patterns.md) | gRPC / Spring / Dubbo 边界 |
 | [Bootstrap 与 Membership 参考](./service-registry-references/bootstrap-and-membership-models.md) | DHCP / Serf / xDS / DNS SRV 等 |
 | [对照表](./service-registry-references/comparison-matrix.md) | 系统 × 机制速查 |
 
-### 3.4 仓库外相关
+### 3.4 旁路参考
+
+以下文件属于 **父仓 / 并列检出** 时的对照材料，**不是** etdiscovery 仓库源码。无父仓时忽略即可。
 
 | 文档 | 读什么 |
 | --- | --- |
-| [EasyTier RoutePeerInfo node type flags](../../easytier/docs/route_peer_node_type_flags.md) | 主仓库字段扩展草案 |
-| [EasyTier 仓库研究](../../easytier-research.md) | 仓库级研究笔记 |
-| [根 README](../README.md) | 面向新人的通读概述（痛点、定位比较、快速上手） |
+| EasyTier `docs/route_peer_node_type_flags.md`（父仓） | node type flags 字段草案 |
+| EasyTier 仓库研究笔记（父仓根） | 仓库级研究 |
+| [根 README](../README.md) | 新人通读 |
+| [AGENTS.md](../AGENTS.md) | 代码结构与贡献约定 |
 
-### 3.5 文档职责一览（避免重复）
-
-| 问题 | 去哪看 |
-| --- | --- |
-| 项目解决什么、像什么 | 根 [README](../README.md) + 本文 §1–2 |
-| 角色/算法长期设计 | [核心设计](./service-registry-core-design.md) |
-| HTTP/SDK 路径与语义 | [应用层](./service-registry-application-layer.md) |
-| 业务怎么调本地 runtime / daemon | [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md) |
-| 怎么找到 registry | [Bootstrap](./service-registry-bootstrap-discovery.md) |
-| 现在做到哪、有哪些坑 | [plan](./service-registry-plan.md) |
-| 怎么在本机跑起来 | [Runbook](./service-registry-prototype-validation.md) |
-| 别人系统怎么做的 | [references](./service-registry-references.md) |
+文档写到哪、一篇一主题等 **编写规范** 见 [AGENTS.md §4](../AGENTS.md#4-文档职责与编写规范)。
 
 ---
 
-## 4. 当前状态（摘要）
+## 4. 当前状态
 
-详情只维护在 [plan](./service-registry-plan.md)。
+详情只维护在 [plan](./service-registry-plan.md)；实现缺口速览见 [AGENTS.md §6](../AGENTS.md#6-当前实现缺口)。
 
 - Web 原型：EasyTier 托管、registry 发现、worker 控制面注册、基础 select/services  
 - **Sdk + Contracts + examples 接入骨架**已落地；**`/runtime/v1` 服务端与 mode 托管策略未实现**  
 - 契约见 [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md)  
 - 未完成：lease/health 完整行为、watch、反馈、弱网评分、多语言 SDK  
-- 动手前必读：[plan 运维限制](./service-registry-plan.md#3-当前限制与运维假设)
 
 ---
 
@@ -210,6 +210,8 @@
 
 **产品 / 架构通读：** 根 README → 本文 §1–2 → 核心设计 §1–4 → 应用层 §1–4  
 
-**实现联调：** 本文 §3 → plan → Runbook → Bootstrap 配置模型  
+**动手改代码：** [AGENTS.md](../AGENTS.md) → plan → 对应设计专题  
+
+**实现联调：** plan → Runbook → Bootstrap 配置模型  
 
 **做 API / SDK：** 应用层 + [交互契约](./service-registry-app-runtime-interaction.md) → plan 接口清单  

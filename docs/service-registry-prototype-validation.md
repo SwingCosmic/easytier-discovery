@@ -1,7 +1,7 @@
 # 原型验证 Runbook
 
 本文档说明最小 Web 原型的 **启动方式、平台权限与排查要点**。  
-“做到哪了、接口是否占位”见 [实施方案](./service-registry-plan.md)；目标设计见 [核心设计](./service-registry-core-design.md) / [应用层](./service-registry-application-layer.md) / [Bootstrap](./service-registry-bootstrap-discovery.md)。
+“做到哪了”见 [plan](./service-registry-plan.md)；模块树与硬约定见 [AGENTS.md](../AGENTS.md)；目标设计见核心设计 / 应用层 / Bootstrap。
 
 ---
 
@@ -13,30 +13,21 @@
 
 ---
 
-## 2. 项目结构
+## 2. 启动要点
 
-- `etdiscovery/EtDiscovery.Web/` — 托管 EasyTier、HTTP API、role host
-- `etdiscovery/EtDiscovery.Core/` — 模型与策略
-- `etdiscovery/EtDiscovery.Tests/` — 纯逻辑测试
-- `etdiscovery/docs/` — 设计与进度文档
+- **必须**提供 `--roles`（`registry` / `worker` / `client`，可组合）
+- 其余优先读配置；`EtDiscovery` 与 `EasyTier` 分节
+- `easytier-core`：生成 TOML + `-c`，另加 `--rpc-portal`
+- 角色元数据只由 `--roles` 写入 `node_type_*`
 
----
-
-## 3. 启动要点
-
-- **必须**命令行提供 `--roles`（`registry` / `worker` / `client`，可组合）
-- 其余优先读配置文件；`EtDiscovery` 与 `EasyTier` 分节
-- `easytier-core` 由生成 TOML + `-c` 启动，另加分配的 `--rpc-portal`
-- 角色元数据只由 `--roles` 写入 `node_type_*`，勿在配置中手写覆盖字段
-
-配置与 registry 定位字段说明见 [bootstrap 配置模型](./service-registry-bootstrap-discovery.md#5-配置模型)。  
-运维硬约束（ListenUrl、listeners、Windows 提权等）见 [plan 限制](./service-registry-plan.md#3-当前限制与运维假设)。
+配置字段见 [bootstrap 配置模型](./service-registry-bootstrap-discovery.md#5-配置模型)。  
+硬约束见 [AGENTS.md §3](../AGENTS.md#3-代码与行为硬约定)；回归备忘见 [plan §3](./service-registry-plan.md#3-当前限制与运维假设)。
 
 ---
 
-## 4. 推荐验证路径
+## 3. 推荐验证路径
 
-### 4.1 Windows
+### 3.1 Windows
 
 1. `registry`：固定 `EasyTier.Ipv4`，`EtDiscovery.ListenUrl=http://0.0.0.0:8080`
 2. 以管理员权限运行发布产物 `EtDiscovery.Web.exe --roles registry`（不要用 `dotnet xxx.dll` 期望 UAC）
@@ -47,15 +38,15 @@
    - `curl http://<registry-vip>:8080/discovery/registry`
    - worker 日志中 selected registry；registry 上服务列表含 worker 实例
 
-### 4.2 Linux
+### 3.2 Linux
 
 1. 确认 `/dev/net/tun` 与 `tun` 模块（`modprobe tun`）
 2. 需要本机 VIP 时通常要 root 或等效权限
 3. 再按上节启动 registry / worker
 
-### 4.3 Docker / Kubernetes（真实 Linux）
+### 3.3 Docker / Kubernetes（真实 Linux）
 
-镜像与样例在仓库 `etdiscovery/`：
+镜像与样例在本仓库根：
 
 - `Dockerfile` — multi-stage 构建 `EtDiscovery.Web` + 打入 `easytier-core` / `easytier-cli`
 - `docker/entrypoint.sh` — 规范化 `ETDISCOVERY_ROLES` / `ETDISCOVERY_CONFIG_FILE`
@@ -67,7 +58,7 @@
 - **优先 Kubernetes** 部署，确认节点/Pod 能否打通 EasyTier **虚拟 IP**
 - 集群需 **kube-proxy 内核代理**（iptables 或 ipvs）正常工作；另需 TUN 与网络能力
 
-构建（在 `etdiscovery/` 目录）：
+构建（本仓库根目录）：
 
 ```bash
 docker build -t etdiscovery:local .
@@ -96,9 +87,9 @@ curl -s http://127.0.0.1:8080/health
 关注 health 中的 `observedLocalVirtualIp`、`easyTier`、`privilegeChecklist`。  
 Worker / 多服务联调契约见 [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md)；`/runtime/v1` 服务端进度见 [plan](./service-registry-plan.md)。
 
-### 4.4 EasyTier 元数据抽查
+### 3.4 EasyTier 元数据抽查
 
-```text
+```bash
 easytier-cli -p <rpc> -n <instance> -o json node info
 easytier-cli -p <rpc> -n <instance> -o json -v peer list
 ```
@@ -112,51 +103,33 @@ easytier-cli -p <rpc> -n <instance> -o json -v peer list
 
 ---
 
-## 5. 权限与平台
+## 4. 权限与平台排查
 
-### 5.1 Windows
+硬约束摘要见 [AGENTS.md §3.3](../AGENTS.md#33-运维与联调约束)。此处只记排查现象：
 
-- 需要本机虚拟 IP 时视为需要管理员：registry、静态 `Ipv4`、DHCP
-- 权限不足常见现象：`Failed to create adapter`、本机 `virtualIp` 空、DHCP 超时
-- `app.manifest` 嵌入 `requireAdministrator`；**仅** `EtDiscovery.Web.exe` 触发 UAC
-
-### 5.2 Linux
-
-- 需要本机 VIP 时须 TUN 可用
-- 可选能力可能额外需要 `CAP_NET_ADMIN`（与最基本 TUN 前提不同层）
-
-### 5.3 DHCP 含义
-
-- `worker + dhcp` = EasyTier 自动选本机虚拟地址逻辑
-- **不是** registry 充当传统 DHCP 服务器并主动分配地址
-- registry 单点启动时不应盲目自开 DHCP，避免 registry IP 漂移
+- **Windows**：VIP/静态 Ipv4/DHCP 常需管理员；不足时见 `Failed to create adapter`、本机 `virtualIp` 空、DHCP 超时。仅 `EtDiscovery.Web.exe` 触发 UAC。
+- **Linux**：本机 VIP 须 TUN；可选再需 `CAP_NET_ADMIN`。
+- **DHCP**：`worker + dhcp` 是 EasyTier 本机自动选址，不是 registry 传统 DHCP；registry 单点勿盲目自开 DHCP。
 
 ---
 
-## 6. 排查接口与字段
+## 5. 排查接口与字段
 
-### 6.1 常用 HTTP
+### 5.1 常用 HTTP
 
-完整路径与语义见 [应用层 API](./service-registry-application-layer.md#4-应用层-api)。验证时常用：
+完整路径见 [应用层 API](./service-registry-application-layer.md#4-应用层-api)。验证常用：`/health`、`/easytier/peers`、`/discovery/registry`、`/discovery/services`、`/discovery/select`、`POST|DELETE /discovery/instances...`。
 
-- `GET /health`
-- `GET /easytier/peers`
-- `GET /discovery/registry`
-- `GET /discovery/services`
-- `GET /discovery/select`
-- `POST/DELETE /discovery/instances...`
-
-### 6.2 观测字段提示
+### 5.2 观测字段提示
 
 - peers：`networkName`、`virtualIp`、`sameNetwork`、`inVirtualNetworkCidr`、`eligibleForDiscovery`、roles / `node_type_*`
-- health：`configuredVirtualIp`、`dhcpEnabled`、权限相关 checklist、EasyTier 最近 stdout/stderr
+- health：`configuredVirtualIp`、`dhcpEnabled`、权限 checklist、EasyTier 最近 stdout/stderr
 
-### 6.3 网络筛选
+### 5.3 网络筛选
 
-`/discovery/*` 候选通常要求同网且 VIP 落在 `virtual-network-cidr` 内（具体以当前实现为准）。
+`/discovery/*` 候选通常要求同网且 VIP 落在 `virtual-network-cidr` 内（以当前实现为准）。
 
 ---
 
-## 7. 已知问题索引
+## 6. 已知问题索引
 
-联调已修问题与强制运维约束汇总在 [plan §3](./service-registry-plan.md#3-当前限制与运维假设)，此处不重复维护第二份表格。
+联调回归表见 [plan §3.1](./service-registry-plan.md#31-联调已修问题备忘防回归)；硬约束见 [AGENTS.md §3](../AGENTS.md#3-代码与行为硬约定)。
