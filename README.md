@@ -151,9 +151,13 @@ EasyTier Discovery（代码内简称 `EtDiscovery`）是构建在 [EasyTier](htt
 
 ### 仓库结构
 
-- `EtDiscovery.Web/` — ASP.NET Core 宿主、EasyTier 进程管理、HTTP API
-- `EtDiscovery.Core/` — 模型与选择策略
-- `EtDiscovery.Tests/` — 单元测试
+- `EtDiscovery.Contracts/` — Shared Project：线缆/业务可见模型（编入 Core 与 Sdk）
+- `EtDiscovery.Core/` — 引擎与宿主内部逻辑
+- `EtDiscovery.Sdk/` — 业务薄客户端（`AddEtDiscovery` / `UseEtDiscovery`）
+- `EtDiscovery.Web/` — ASP.NET Core 宿主、EasyTier 进程管理、HTTP Controllers
+- `EtDiscovery.Tests/` / `EtDiscovery.Sdk.Tests/` — 单元测试
+- `examples/` — ServiceA/B 仅 SDK 接入骨架（无跨服务业务调用）
+- `Dockerfile` / `docker/` — Linux 镜像、entrypoint、K8s ConfigMap 样例
 - `docs/` — 设计、进度与参考资料
 
 ---
@@ -241,7 +245,20 @@ dotnet run --project EtDiscovery.Web -- --roles registry
 dotnet run --project EtDiscovery.Web -- --roles worker
 ```
 
-运维硬约束与排查：[`docs/service-registry-plan.md`](./docs/service-registry-plan.md#3-当前限制与运维假设)、[`docs/service-registry-prototype-validation.md`](./docs/service-registry-prototype-validation.md)。
+### 5. 容器（真实 Linux / 优先 K8s）
+
+```bash
+cd etdiscovery
+docker build -t etdiscovery:local .
+# 角色与模式：ETDISCOVERY_ROLES、ETDISCOVERY_MODE（镜像默认 embedded；取值 sidecar|daemon|embedded）
+# 配置：ETDISCOVERY_CONFIG_FILE 或挂载 /config/appsettings.json（运维配置面）
+# 需要 /dev/net/tun 与 NET_ADMIN；集群侧 kube-proxy 使用内核代理以便 underlay 正常
+```
+
+样例清单：`docker/k8s/registry-sample.yaml`。详细步骤见 [原型 Runbook §4.3](./docs/service-registry-prototype-validation.md#43-docker--kubernetes真实-linux)。
+
+运维硬约束与排查：[`docs/service-registry-plan.md`](./docs/service-registry-plan.md#3-当前限制与运维假设)、[`docs/service-registry-prototype-validation.md`](./docs/service-registry-prototype-validation.md)。  
+业务进程与本地 runtime 契约：[`docs/service-registry-app-runtime-interaction.md`](./docs/service-registry-app-runtime-interaction.md)。
 
 ---
 

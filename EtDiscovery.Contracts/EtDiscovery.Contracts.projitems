@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <HasSharedItems>true</HasSharedItems>
+    <SharedGUID>{6FC8E302-5D3F-44F5-B70E-18F40EF83615}</SharedGUID>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration">
+    <Import_RootNamespace>EtDiscovery.Core</Import_RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)Models\CallContext.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\CallErrorType.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\CallMode.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\CallModeRecommendation.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\ConfigValidity.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\EndpointDescriptor.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\ExposeMode.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\HealthCheckDefinition.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\HealthState.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\InstanceWatchEvent.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\LinkProfile.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\NetworkType.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\NodeProfile.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\NodeRole.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\RegisterServiceRequest.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\ReportCallResultRequest.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\SelectedInstance.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\ServiceDefinition.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\ServiceInstance.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\ServiceInstanceStatus.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\ServiceKey.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\ServiceQuery.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Models\WatchEventType.cs" />
+  </ItemGroup>
+</Project>

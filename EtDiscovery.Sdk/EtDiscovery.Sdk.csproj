@@ -4,7 +4,13 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <RootNamespace>EtDiscovery.Sdk</RootNamespace>
+    <Description>Thin client for local EtDiscovery runtime (/runtime/v1). Business apps depend on this package only.</Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
 
   <Import Project="..\EtDiscovery.Contracts\EtDiscovery.Contracts.projitems" Label="Shared" />
 

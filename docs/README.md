@@ -147,8 +147,9 @@
 | 顺序 | 文档 | 读什么 |
 | --- | --- | --- |
 | 1 | **本文** | 定位、场景、目录 |
-| 2 | [核心设计](./service-registry-core-design.md) | 目标边界；RuntimeMode / NodeRole / CapabilityFlags；实体；健康状态机；评分与选择算法 |
+| 2 | [核心设计](./service-registry-core-design.md) | 目标边界；Mode / NodeRole / CapabilityFlags；实体；健康状态机；评分与选择算法 |
 | 3 | [应用层与集成](./service-registry-application-layer.md) | **API 权威表**；SDK 边界；sidecar/daemon/embedded；框架集成；SelectedInstance；移动端预留 |
+| 3b | [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md) | **契约结论**：mode/角色、EasyTier 托管、配置拆分、`/runtime/v1`、SDK API |
 | 4 | [Registry Bootstrap Discovery](./service-registry-bootstrap-discovery.md) | 为何 peer ≠ registry；候选优先级；配置模型；`GET /discovery/registry`；启动流程 |
 
 ### 3.2 进度、验证与分歧
@@ -185,6 +186,7 @@
 | 项目解决什么、像什么 | 根 [README](../README.md) + 本文 §1–2 |
 | 角色/算法长期设计 | [核心设计](./service-registry-core-design.md) |
 | HTTP/SDK 路径与语义 | [应用层](./service-registry-application-layer.md) |
+| 业务怎么调本地 runtime / daemon | [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md) |
 | 怎么找到 registry | [Bootstrap](./service-registry-bootstrap-discovery.md) |
 | 现在做到哪、有哪些坑 | [plan](./service-registry-plan.md) |
 | 怎么在本机跑起来 | [Runbook](./service-registry-prototype-validation.md) |
@@ -196,8 +198,10 @@
 
 详情只维护在 [plan](./service-registry-plan.md)。
 
-- 最小 Web 原型已联调：托管 EasyTier、route 元数据识别 registry、worker HTTP 注册、基础发现与选择  
-- 未完成：lease/health/status/metadata 完整行为、watch、反馈、弱网评分、多语言 SDK  
+- Web 原型：EasyTier 托管、registry 发现、worker 控制面注册、基础 select/services  
+- **Sdk + Contracts + examples 接入骨架**已落地；**`/runtime/v1` 服务端与 mode 托管策略未实现**  
+- 契约见 [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md)  
+- 未完成：lease/health 完整行为、watch、反馈、弱网评分、多语言 SDK  
 - 动手前必读：[plan 运维限制](./service-registry-plan.md#3-当前限制与运维假设)
 
 ---
@@ -208,4 +212,4 @@
 
 **实现联调：** 本文 §3 → plan → Runbook → Bootstrap 配置模型  
 
-**做 API / SDK：** 应用层全文 → plan 接口清单 → open questions  
+**做 API / SDK：** 应用层 + [交互契约](./service-registry-app-runtime-interaction.md) → plan 接口清单  

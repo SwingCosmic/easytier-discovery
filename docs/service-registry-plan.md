@@ -13,7 +13,7 @@
 - 服务目录、配置和 ACL 采用“拓扑所有权 + owner 确认链 + 多 registry 最终一致同步”。
 - 调用治理只做实例选择与推荐调用方式，不封装业务 RPC。
 - 弱网可用性采用“租约 + 应用健康 + 网络信号 + 观察者投票 + 调用反馈”的组合判断。
-- 接入形态采用 **薄 SDK + 本地 runtime + 多承载模式**（sidecar / daemon / embedded / 无 SDK HTTP），细节见 [应用层与集成](./service-registry-application-layer.md)。
+- 接入形态采用 **薄 SDK + 本地 runtime + 多承载模式**（sidecar / daemon / embedded），契约见 [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md) 与 [应用层](./service-registry-application-layer.md)。
 - 首版主要面向 Node.js、Java、.NET 接入；移动端首版只预留边界。
 
 未决分歧见 [待讨论问题](./service-registry-open-questions.md)。
@@ -22,29 +22,26 @@
 
 ## 2. 当前实现进度
 
-截至 2026-07-11，最小 Web 原型（`EtDiscovery.Web` / `Core` / `Tests`）已完成 **registry 发现 + worker 注册** 联调。
+截至 2026-07-12：Web 原型完成 **registry 发现 + worker 控制面注册**；**Contracts Shared Project + Sdk + examples 接入骨架**已落地。本地 `/runtime/v1` 与 mode 驱动的 EasyTier 托管策略仍按 [交互契约](./service-registry-app-runtime-interaction.md) 待实现。
 
 ### 2.1 已完成
 
-- 托管 `easytier-core`（生成 TOML + `-c`；仅保留运行时必要的 `--rpc-portal`）
-- 通过 `easytier-cli` 读取 peer / route 元数据
-- 配置拆分：`EtDiscovery` 与 `EasyTier`；`Peers` 只属于 `EasyTier`
-- 角色元数据：`node_type_app_id` / `node_type_flags` 仅由 `--roles` 推导，禁止配置覆盖
-- registry 定位：
-  1. 显式 `RegistryCandidates`（过渡期仍可读旧字段 `RegistryPeer`，**计划在下次调整中移除**）
-  2. route metadata 中带 registry 角色位的 peer
-  3. 对候选探测 `GET /discovery/registry`
-  4. **不再**把“首个可发现 peer VIP”当作 registry
-- 无相关元数据时远端 peer 默认视为 `worker`
-- registry 内存实例注册表：按 `instanceId` upsert / deregister / 单实例查询
-- worker HTTP 主动注册/下线；`registry + worker` 同机可走进程内注册
-- `/discovery/services`、`GET /discovery/select` 基于真实已注册实例
-- 配置 `Services[]`（`ServiceName` / `Port` / `Protocol` 及可选元数据字段）
-- 内存读取模型：共享数据源 + 瞬时快照读；接受短时间内两次读取不一致
+- 托管 `easytier-core`（生成 TOML + `-c`；运行时 `--rpc-portal`）；`easytier-cli` 读 peer/route
+- 配置：`EtDiscovery` / `EasyTier` 分离；`Peers` 属 EasyTier
+- 角色元数据：仅由 `--roles` 推导，禁止配置覆盖
+- registry 定位：`RegistryCandidates` → route metadata registry 位 → `GET /discovery/registry`（不再用“首个 peer”）
+- registry 内存目录：upsert / deregister / 查询；`/discovery/services`、`/discovery/select`
+- worker 经 HTTP 向 registry 注册；同机 `registry+worker` 可进程内注册；`Services[]` 配置代注册
+- Controllers 组织 HTTP；Dockerfile / entrypoint / k8s registry 样例
+- 容器入口：`ETDISCOVERY_ROLES`（必填）、`ETDISCOVERY_MODE`（镜像默认 `embedded`；兼容旧 `standalone`→embedded）
+- **`EtDiscovery.Contracts`**（Shared Project）+ **`EtDiscovery.Core`**（引擎/宿主）+ **`EtDiscovery.Sdk`**（`AddEtDiscovery` / `UseEtDiscovery` / 心跳 HostedService）
+- **`examples/ServiceA|B`**：SDK DI 接入与瘦配置；无跨服务业务调用代码
+- **Sdk 单测**（mock HTTP 路径）；Core/Web 既有测试保持通过
+- 交互契约文档（结论）：[应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md)
 
 ### 2.2 接口进度（清单）
 
-语义与路径设计见 [应用层 API](./service-registry-application-layer.md#4-应用层-api)。本处只记实现状态。
+语义见 [应用层](./service-registry-application-layer.md#4-应用层-api) 与 [交互契约](./service-registry-app-runtime-interaction.md#4-api-面)。本处只记实现状态。
 
 | HTTP | 状态 |
 | --- | --- |
@@ -56,7 +53,7 @@
 | `DELETE /discovery/instances/{instanceId}` | 已实现 |
 | `GET /discovery/instances/{instanceId}` | 已实现 |
 | `GET /discovery/services` | 已实现 |
-| `GET /discovery/select` | 已实现 |
+| `GET /discovery/select` | 已实现（仅 registry） |
 | `PUT /discovery/instances/{instanceId}/lease` | 占位 |
 | `PUT /discovery/instances/{instanceId}/health` | 占位 |
 | `PUT /discovery/instances/{instanceId}/status` | 占位 |
@@ -66,8 +63,19 @@
 | `GET /discovery/nodes/{nodeId}/instances` | 占位 |
 | `PUT /discovery/nodes/{nodeId}/status` | 占位 |
 | `DELETE /discovery/nodes/{nodeId}/status` | 占位 |
+| `GET/POST/PUT/DELETE /runtime/v1/*` | **未做**（Sdk 已按契约编码） |
 | `GET /bootstrap/status` | 未做 |
 | watch / reportCallResult 等 | 未做 |
+
+### 2.2b 代码组件进度
+
+| 组件 | 状态 |
+| --- | --- |
+| `EtDiscovery.Contracts` Shared Project | 已落地 |
+| `EtDiscovery.Sdk` + Sdk.Tests | 已落地（对 `/runtime/v1` 的客户端） |
+| `examples/ServiceA\|B` | 已落地（DI only） |
+| Web 解析 `Mode` / 按 mode 托管 EasyTier | 未做（入口 env 已预置；ProcessManager 仍总是托管） |
+| ActiveHeartbeat TTL 管线 | 未做（仍有 worker 周期 upsert 路径） |
 
 ### 2.3 Bootstrap 相关进度
 
@@ -149,8 +157,8 @@
 
 ### 阶段 2：控制面最小闭环 — 部分完成
 
-- 已完成：实例注册/下线/查询/发现/选择。
-- 未完成：lease / health / status / metadata 等辅助接口；watch；调用反馈。
+- 已完成：实例注册/下线/查询/发现/选择（控制面 `/discovery/*`）。
+- 未完成：本地 `/runtime/v1/*`；lease / health / status / metadata 行为；watch；调用反馈；mode 驱动 EasyTier 托管。
 
 ### 阶段 2.5：Registry Bootstrap Discovery — 主路径已联调
 
@@ -171,9 +179,10 @@
 
 - 可用性评分、怀疑票、空保护、NAT/链路质量进评分。
 
-### 阶段 4：多语言接入 — 未开始
+### 阶段 4：多语言接入 — 部分开始
 
-- 统一 runtime 协议（gRPC 主、HTTP 辅）+ 薄 SDK；见 [应用层](./service-registry-application-layer.md)。
+- .NET：`EtDiscovery.Sdk` + Contracts + examples 接入骨架已落地；依赖 Web `/runtime/v1`。
+- 统一 runtime 协议（gRPC 主、HTTP 辅）与其它语言 SDK 未开始；见 [应用层](./service-registry-application-layer.md)、[交互契约](./service-registry-app-runtime-interaction.md)。
 
 ### 阶段 5：框架适配与扩展 — 未开始
 
@@ -205,12 +214,11 @@
 
 ## 6. 下一轮工作顺序
 
-1. 移除配置兼容字段 `RegistryPeer`，统一 `RegistryCandidates`。
-2. 补齐 lease / health / status / metadata 的请求响应契约与行为。
-3. 补 `LastKnownRegistries` 与 `/bootstrap/status`。
-4. 冻结 runtime 协议面与 sidecar / daemon / embedded 共享模型。
-5. 细化多语言薄 SDK 与框架集成。
-6. 补评分、反馈与弱网调度。
+1. 实现 Web **`/runtime/v1/*`**（register / heartbeat / select / resolve）与角色门禁；对接 ActiveHeartbeat TTL。  
+2. 实现 **`Mode` 解析** 与 EasyTier 托管策略（daemon 不托管 / sidecar·embedded 捆绑）。  
+3. examples 补跨服务调用（在 runtime API 可用后）；Linux/K8s VIP 验证。  
+4. 移除 `RegistryPeer`；补齐 lease/health/status/metadata 行为。  
+5. `LastKnownRegistries`、`/bootstrap/status`；多语言薄 SDK；评分与反馈。
 
 ---
 

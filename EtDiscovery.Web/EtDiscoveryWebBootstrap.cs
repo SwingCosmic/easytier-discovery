@@ -12,13 +12,18 @@ public static class EtDiscoveryWebBootstrap
             .AddEnvironmentVariables(prefix: "ETDISCOVERY_")
             .Build();
 
-        var configFile = bootstrap["config-file"];
+        var configFile = FirstNonEmpty(
+            bootstrap["config-file"],
+            bootstrap["CONFIG_FILE"],
+            bootstrap["config_file"]);
         if (!string.IsNullOrWhiteSpace(configFile))
         {
             builder.Configuration.AddJsonFile(configFile, optional: false, reloadOnChange: false);
         }
 
-        var roles = ParseRolesFromArgs(bootstrap["roles"]);
+        var roles = ParseRolesFromArgs(FirstNonEmpty(
+            bootstrap["roles"],
+            bootstrap["ROLES"]));
         var settings = builder.Configuration
             .GetSection(EtDiscoveryConfiguration.SectionName)
             .Get<EtDiscoveryConfiguration>()
@@ -35,7 +40,8 @@ public static class EtDiscoveryWebBootstrap
     {
         if (string.IsNullOrWhiteSpace(rolesValue))
         {
-            throw new ArgumentException("--roles is required and must be provided explicitly on the command line.");
+            throw new ArgumentException(
+                "Roles are required via --roles, ETDISCOVERY_roles, or ETDISCOVERY_ROLES (comma-separated: registry, worker, client).");
         }
 
         var roles = rolesValue
@@ -46,10 +52,23 @@ public static class EtDiscoveryWebBootstrap
 
         if (roles.Length == 0)
         {
-            throw new ArgumentException("At least one role must be provided via --roles.");
+            throw new ArgumentException("At least one role must be provided via --roles / ETDISCOVERY_ROLES.");
         }
 
         return roles;
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 
     private static RoleName ParseRole(string value) => value.ToLowerInvariant() switch

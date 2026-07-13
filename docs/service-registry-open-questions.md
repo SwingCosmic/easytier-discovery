@@ -1,6 +1,7 @@
 # 待讨论分歧点
 
-只记录 **尚未冻结** 的设计项。已确认内容见 [plan §1](./service-registry-plan.md#1-已确认内容)；运行模式与 SDK 边界见 [应用层](./service-registry-application-layer.md)；角色模型见 [核心设计](./service-registry-core-design.md)。
+只记录 **尚未冻结** 的设计项。已确认内容见 [plan §1](./service-registry-plan.md#1-已确认内容)。  
+应用 ↔ runtime、mode、SDK、配置拆分等 **已冻结** 结论见 [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md)（不再在此复述）。
 
 ## 1. 语言与实现形态
 
@@ -10,13 +11,13 @@
 
 倾向（未冻结）：核心算法库 + 独立控制面进程；多语言首版 Node.js / Java / .NET。
 
-## 2. Sidecar 细节（主次已有倾向）
+## 2. 传输与进程边界（实现细节）
 
-主次关系已写入应用层（sidecar/daemon 主路径，C ABI 次路径）。仍待拍板：
+契约已定；下列实现选型未冻结：
 
-- 控制协议：仅 gRPC，还是 gRPC + HTTP/JSON
-- sidecar 是否负责拉起 EasyTier，还是只连接已有实例
-- sidecar 与业务进程的权限边界
+- 控制协议：长期 gRPC 为主 vs 继续以 HTTP/JSON 为主（当前原型与 Sdk 为 HTTP/JSON）
+- `daemon` 连接已有 EasyTier 的配置面（rpc-portal、观测路径、权限）
+- sidecar 与业务进程的本地鉴权（UDS、token 等）
 
 ## 3. Registry 职责上限
 

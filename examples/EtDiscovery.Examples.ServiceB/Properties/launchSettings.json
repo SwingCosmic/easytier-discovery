@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "ServiceB": {
+      "commandName": "Project",
+      "applicationUrl": "http://127.0.0.1:9002",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}

@@ -147,9 +147,10 @@ Authoritative checklist: [`docs/service-registry-plan.md`](./docs/service-regist
 
 ### Repository layout
 
-- `EtDiscovery.Web/` — ASP.NET host, EasyTier process management, HTTP APIs  
+- `EtDiscovery.Web/` — ASP.NET host, EasyTier process management, HTTP controllers  
 - `EtDiscovery.Core/` — models and selection policies  
 - `EtDiscovery.Tests/` — unit tests  
+- `Dockerfile` / `docker/` — Linux image, entrypoint, sample K8s ConfigMap manifests  
 - `docs/` — design, progress, references  
 
 ---
@@ -237,7 +238,20 @@ dotnet run --project EtDiscovery.Web -- --roles registry
 dotnet run --project EtDiscovery.Web -- --roles worker
 ```
 
-Ops constraints: [plan §3](./docs/service-registry-plan.md#3-当前限制与运维假设), [runbook](./docs/service-registry-prototype-validation.md).
+### 5. Containers (real Linux / prefer Kubernetes)
+
+```bash
+cd etdiscovery
+docker build -t etdiscovery:local .
+# Roles/mode: ETDISCOVERY_ROLES, ETDISCOVERY_MODE (image default: embedded; sidecar|daemon|embedded)
+# Config: ETDISCOVERY_CONFIG_FILE or mount /config/appsettings.json (ops/runtime plane)
+# Requires /dev/net/tun and NET_ADMIN; use kube-proxy kernel mode (iptables/ipvs) on the cluster
+```
+
+Sample manifest: `docker/k8s/registry-sample.yaml`. Details: [runbook §4.3](./docs/service-registry-prototype-validation.md#43-docker--kubernetes真实-linux).
+
+Ops constraints: [plan §3](./docs/service-registry-plan.md#3-当前限制与运维假设), [runbook](./docs/service-registry-prototype-validation.md).  
+App ↔ local runtime (blocks daemon examples until decided): [interaction design](./docs/service-registry-app-runtime-interaction.md).
 
 ---
 

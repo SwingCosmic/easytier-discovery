@@ -1,13 +1,13 @@
 using EtDiscovery.Core.Models;
 using EtDiscovery.Core.Services;
 using EtDiscovery.Web;
-using EtDiscovery.Web.Endpoints;
 using EtDiscovery.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 var options = EtDiscoveryWebBootstrap.LoadOptions(builder, args);
 builder.WebHost.UseUrls(options.ListenUrl);
 
+builder.Services.AddControllers();
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(new DiscoveryNodeContext(
     "local-node",
@@ -33,5 +33,5 @@ builder.Services.AddHostedService<DiscoveryRefreshBackgroundService>();
 builder.Services.AddHostedService<WorkerRegistrationBackgroundService>();
 
 var app = builder.Build();
-app.MapEtDiscoveryEndpoints();
+app.MapControllers();
 app.Run();

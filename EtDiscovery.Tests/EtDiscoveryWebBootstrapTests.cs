@@ -77,7 +77,34 @@ public class EtDiscoveryWebBootstrapTests
         });
 
         Assert.That(() => EtDiscoveryWebBootstrap.LoadOptions(builder, []),
-            Throws.Exception.With.Message.Contains("--roles"));
+            Throws.Exception.With.Message.Contains("Roles are required"));
+    }
+
+    [Test]
+    public void RolesCanBeProvidedViaEnvironmentAlias()
+    {
+        var previous = Environment.GetEnvironmentVariable("ETDISCOVERY_ROLES");
+        try
+        {
+            Environment.SetEnvironmentVariable("ETDISCOVERY_ROLES", "registry");
+            var builder = WebApplication.CreateBuilder();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["EasyTier:CorePath"] = "/usr/local/bin/easytier-core",
+                ["EasyTier:Ipv4"] = "10.144.144.1",
+                ["EtDiscovery:NetworkName"] = "demo-net",
+                ["EtDiscovery:NetworkSecret"] = "demo-secret",
+                ["EtDiscovery:VirtualNetworkCidr"] = "10.144.144.0/24",
+                ["EtDiscovery:ListenUrl"] = "http://0.0.0.0:8080",
+            });
+
+            var options = EtDiscoveryWebBootstrap.LoadOptions(builder, []);
+            Assert.That(options.Roles, Is.EqualTo(new[] { RoleName.Registry }));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ETDISCOVERY_ROLES", previous);
+        }
     }
 
     [Test]

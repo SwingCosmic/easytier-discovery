@@ -59,14 +59,18 @@ EtDiscovery 介于 APM 与 service mesh 之间：
 
 ### 2.3 运行模式矩阵
 
-| 模式 | 说明 | 首版建议 |
-| --- | --- | --- |
-| sidecar | 与业务就近部署；本地 HTTP/gRPC/Unix Socket | 主推（K8s、Node.js、Java） |
-| host daemon | 多进程共享宿主机 runtime | 主推补充（VM/物理机） |
-| embedded | C ABI/FFI 进程内 | 次路径（Rust/C++、时延敏感） |
-| no-SDK | 直接打 HTTP/gRPC 接口 | 运维验证、脚本、渐进迁移 |
+`Mode` 为 runtime **启动必传**（`--mode` / `ETDISCOVERY_MODE` / `EtDiscovery:Mode`）。  
+取值：`sidecar` | `daemon` | `embedded`（旧名 `standalone` → `embedded`）。  
+矩阵、配置拆分、SDK 契约见 [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md)。
 
-四种模式共享：同一应用层 API 语义、同一实例/反馈模型、同一 runtime 控制协议。
+| mode | 说明 | EasyTier | 典型 |
+| --- | --- | --- | --- |
+| `sidecar` | 业务旁路；SDK 连本机 runtime | 捆绑托管 | K8s 一 Pod 一服务（`worker,client`） |
+| `daemon` | 同 NS 多业务共享 EtDiscovery | 不捆绑；隧道外置 | VM 多进程互调 |
+| `embedded` | 进程一体（内嵌或本进程即 EtDiscovery） | 捆绑托管 | K8s registry |
+| no-SDK | 直接打本地 `/runtime/v1` | — | 运维验证 |
+
+业务配置瘦身（无 NetworkSecret / EasyTier / Mode / Roles）；运维配置挂 runtime（daemon 下 EasyTier 另单元）。
 
 ### 2.4 代码组织
 

@@ -53,7 +53,50 @@
 2. 需要本机 VIP 时通常要 root 或等效权限
 3. 再按上节启动 registry / worker
 
-### 4.3 EasyTier 元数据抽查
+### 4.3 Docker / Kubernetes（真实 Linux）
+
+镜像与样例在仓库 `etdiscovery/`：
+
+- `Dockerfile` — multi-stage 构建 `EtDiscovery.Web` + 打入 `easytier-core` / `easytier-cli`
+- `docker/entrypoint.sh` — 规范化 `ETDISCOVERY_ROLES` / `ETDISCOVERY_CONFIG_FILE`
+- `docker/k8s/registry-sample.yaml` — ConfigMap + Deployment + Service 样例
+
+**验证环境约定：**
+
+- 只在 **真实 Linux 服务器** 上测镜像（不以 Docker Desktop / Windows 容器为通过标准）
+- **优先 Kubernetes** 部署，确认节点/Pod 能否打通 EasyTier **虚拟 IP**
+- 集群需 **kube-proxy 内核代理**（iptables 或 ipvs）正常工作；另需 TUN 与网络能力
+
+构建（在 `etdiscovery/` 目录）：
+
+```bash
+docker build -t etdiscovery:local .
+```
+
+运行要点：
+
+| 项 | 说明 |
+| --- | --- |
+| 角色 | `ETDISCOVERY_ROLES=registry` 或 `--roles registry`（必填） |
+| 运行模式 | `ETDISCOVERY_MODE=embedded`（registry 镜像默认；或 `--mode`）。取值 `embedded` / `sidecar` / `daemon`。契约见 [交互文档](./service-registry-app-runtime-interaction.md) |
+| 配置 | 挂载 ConfigMap 到 `/config/appsettings.json`，或 `ETDISCOVERY_CONFIG_FILE`（运维面；业务用 Sdk 瘦配置） |
+| 层级 env | `EtDiscovery__NetworkName`、`EasyTier__Ipv4`、`EasyTier__Peers__0` 等 |
+| 设备/权限 | `/dev/net/tun`；`NET_ADMIN`（样例使用 `privileged: true`，可按节点策略收紧） |
+| 健康检查 | `GET /health`（HTTP 8080） |
+
+K8s 最小步骤示意：
+
+```bash
+# 节点已加载 tun；kube-proxy 为 iptables/ipvs 内核模式
+kubectl apply -f docker/k8s/registry-sample.yaml
+kubectl port-forward deploy/etdiscovery-registry 8080:8080
+curl -s http://127.0.0.1:8080/health
+```
+
+关注 health 中的 `observedLocalVirtualIp`、`easyTier`、`privilegeChecklist`。  
+Worker / 多服务联调契约见 [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md)；`/runtime/v1` 服务端进度见 [plan](./service-registry-plan.md)。
+
+### 4.4 EasyTier 元数据抽查
 
 ```text
 easytier-cli -p <rpc> -n <instance> -o json node info

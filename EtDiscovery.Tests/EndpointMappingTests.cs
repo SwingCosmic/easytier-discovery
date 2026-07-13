@@ -1,7 +1,6 @@
 using EtDiscovery.Core.Models;
 using EtDiscovery.Core.Services;
 using EtDiscovery.Web;
-using EtDiscovery.Web.Endpoints;
 using EtDiscovery.Web.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
@@ -27,6 +26,7 @@ public class EndpointMappingTests
                 },
             ]);
 
+        builder.Services.AddControllers().AddApplicationPart(typeof(EtDiscoveryWebOptions).Assembly);
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton(new DiscoveryNodeContext("local-node", [NodeRole.Registry]));
         builder.Services.AddSingleton(new DiscoveryEngine(new ReachableNodeProcessingPolicy(), new RoundRobinServiceSelectionPolicy()));
@@ -43,12 +43,12 @@ public class EndpointMappingTests
         builder.Services.AddLogging();
 
         var app = builder.Build();
-        app.MapEtDiscoveryEndpoints();
+        app.MapControllers();
 
         var routes = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(source => source.Endpoints)
             .OfType<RouteEndpoint>()
-            .Select(endpoint => endpoint.RoutePattern.RawText)
+            .Select(endpoint => NormalizeRoute(endpoint.RoutePattern.RawText))
             .ToArray();
 
         Assert.That(routes, Does.Contain("/health"));
@@ -60,6 +60,17 @@ public class EndpointMappingTests
         Assert.That(routes, Does.Contain("/discovery/services"));
         Assert.That(routes, Does.Contain("/discovery/select"));
         Assert.That(routes, Does.Contain("/discovery/instances/{instanceId}/lease"));
-        Assert.That(routes.Any(route => route is not null && route.StartsWith("/api", StringComparison.Ordinal)), Is.False);
+        Assert.That(routes, Does.Contain("/discovery/nodes/{nodeId}/instances"));
+        Assert.That(routes.Any(route => route.StartsWith("/api", StringComparison.Ordinal)), Is.False);
+    }
+
+    private static string NormalizeRoute(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return string.Empty;
+        }
+
+        return raw.StartsWith('/') ? raw : "/" + raw;
     }
 }

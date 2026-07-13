@@ -21,8 +21,8 @@
 
 这一轮开始，不再把 `A/B/C` 作为核心抽象，而改为三层模型：
 
-- `RuntimeMode`
-  - 描述进程如何承载
+- `Mode`（部署/生命周期模式：`sidecar` / `daemon` / `embedded`）
+  - 描述进程如何承载；**daemon 不捆绑 EasyTier**，**sidecar/embedded 捆绑托管**
 - `NodeRole`
   - 描述节点主要承担什么职责
 - `CapabilityFlags`
@@ -30,23 +30,30 @@
 
 这样可以避免因为部署方式、网络附着方式或特殊职责增多，就把角色枚举无限膨胀。
 
-### 2.1 RuntimeMode
+### 2.1 Mode（原 RuntimeMode）
 
-`RuntimeMode` 只描述运行承载方式，不表达控制面职责和业务权限：
+`Mode` 只描述 **业务如何挂接 runtime / EasyTier 生命周期与部署关系**，不表达控制面职责和业务权限。  
+启动 **必传**：`--mode` / `ETDISCOVERY_MODE` / `EtDiscovery:Mode`。  
+取值 **仅** `sidecar` | `daemon` | `embedded`。  
+**不存在 `standalone` /「独立模式」**——旧称一律映射为 **`embedded`**。  
+角色 × mode 矩阵与经典部署见 [应用 ↔ Runtime 交互 §16](./service-registry-app-runtime-interaction.md#16-mode-定义角色交叉矩阵与经典部署)；**代码不对组合做校验**。
 
 - `sidecar`
-  - 与业务进程或业务容器就近部署
+  - 与业务进程或业务容器就近旁路（典型：K8s 同 Pod）
+  - **捆绑托管** EasyTier（否则无人启动）
 - `daemon`
-  - 以宿主机常驻进程方式为多个业务进程提供本地能力
+  - **业务语义**：多个业务进程共享 **同一网络命名空间内** 一个 EtDiscovery 宿主
+  - **不捆绑、不托管** EasyTier 生命周期：隧道由运维 **外置共享**（多服务共用 VIP）
+  - **不是** Kubernetes `DaemonSet` 的同义词；大集群允许多套独立网络/daemon
 - `embedded`
-  - 以进程内 runtime 或 C ABI/FFI 方式嵌入宿主应用
-- `standalone`
-  - 作为独立控制面或独立网络节点运行，不依赖业务进程同机
+  - runtime 与宿主进程一体：业务内嵌，或 **本进程即 EtDiscovery**（含原 standalone，如 registry）
+  - **捆绑托管** EasyTier；**registry+embedded 必须捆绑**
+  - **roles 含 `registry` 时**：可选 `daemon`（外置隧道，少见）或 `embedded`（集群 **只用** 此）
 
 约束：
 
-- 同一 `NodeRole` 可运行在不同 `RuntimeMode` 下。
-- `RuntimeMode` 不直接决定节点能否发布服务、管理目录或代理业务流量。
+- 同一 `NodeRole` 可运行在不同 `Mode` 下（矩阵见交互文档）。
+- `Mode` 不直接决定目录权限；**是否由 EtDiscovery 托管 EasyTier** 由 `Mode` 解释。
 
 ### 2.2 NodeRole
 
@@ -395,7 +402,7 @@ flowchart TD
 
 建议在后续讨论中默认把下面内容视作“稳定核心”：
 
-- RuntimeMode / NodeRole / CapabilityFlags 三层模型
+- Mode / NodeRole / CapabilityFlags 三层模型
 - 服务定义、实例、节点、链路、配置五类核心实体
 - 拓扑所有权与 owner 确认链
 - 三段式租约与状态机
