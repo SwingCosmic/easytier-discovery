@@ -1,11 +1,65 @@
 # syntax=docker/dockerfile:1
-
+#
 # Build and run on real Linux (amd64/arm64). Preferred deployment target: Kubernetes
 # with TUN + NET_ADMIN so EasyTier virtual IPs can be validated with kube-proxy
 # (kernel proxy / iptables or ipvs) on the cluster nodes.
+#
+# EasyTier binaries are NOT compiled here. They are fetched from the parent
+# EasyTier repository (or any override URL) at image build time.
+#
+# --- Fetch modes (build-arg EASYTIER_SOURCE) ---
+#   actions  (default)  Latest successful GitHub Actions artifact of EasyTier Core
+#   release             GitHub Release zip (fork or upstream published assets)
+#   url                 Explicit EASYTIER_DOWNLOAD_URL (zip containing the binaries)
+#
+# --- Typical independent CI / local builds (this repo does not use GHA) ---
+#
+#   # 1) Recommended: rolling "latest" Release from parent fork main (always overwritten)
+#   docker build -t etdiscovery:local \
+#     --build-arg EASYTIER_SOURCE=release \
+#     --build-arg EASYTIER_GITHUB_REPO=SwingCosmic/EasyTier \
+#     --build-arg EASYTIER_VERSION=latest \
+#     -f Dockerfile .
+#
+#   # 2) Latest Core Actions artifact from a branch (needs token; artifacts expire)
+#   docker build -t etdiscovery:local \
+#     --build-arg EASYTIER_SOURCE=actions \
+#     --build-arg EASYTIER_GITHUB_REPO=SwingCosmic/EasyTier \
+#     --build-arg EASYTIER_BRANCH=feature/node-type-flags \
+#     --secret id=github_token,env=GITHUB_TOKEN \
+#     -f Dockerfile .
+#
+#   # 3) Pin a known Actions run (stable reproduce)
+#   docker build -t etdiscovery:local \
+#     --build-arg EASYTIER_RUN_ID=1234567890 \
+#     --secret id=github_token,env=GITHUB_TOKEN \
+#     -f Dockerfile .
+#
+#   # 4) Official versioned release asset
+#   docker build -t etdiscovery:local \
+#     --build-arg EASYTIER_SOURCE=release \
+#     --build-arg EASYTIER_GITHUB_REPO=EasyTier/EasyTier \
+#     --build-arg EASYTIER_VERSION=2.6.4 \
+#     -f Dockerfile .
+#
+#   # 5) Pre-downloaded zip (air-gapped / custom cache)
+#   docker build -t etdiscovery:local \
+#     --build-arg EASYTIER_SOURCE=url \
+#     --build-arg EASYTIER_DOWNLOAD_URL=https://example.com/easytier-linux-x86_64.zip \
+#     -f Dockerfile .
 
 ARG DOTNET_VERSION=10.0
+
+# EasyTier fetch defaults (overridable via --build-arg)
+ARG EASYTIER_SOURCE=actions
+ARG EASYTIER_GITHUB_REPO=SwingCosmic/EasyTier
+ARG EASYTIER_BRANCH=main
+ARG EASYTIER_WORKFLOW_FILE=core.yml
+ARG EASYTIER_RUN_ID=
+ARG EASYTIER_ARTIFACT_NAME=
 ARG EASYTIER_VERSION=2.6.4
+ARG EASYTIER_DOWNLOAD_URL=
+ARG EASYTIER_GITHUB_API=https://api.github.com
 
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
 WORKDIR /src
@@ -23,27 +77,44 @@ RUN dotnet publish EtDiscovery.Web/EtDiscovery.Web.csproj \
     /p:UseAppHost=false
 
 FROM alpine:3.21 AS easytier
+ARG EASYTIER_SOURCE
+ARG EASYTIER_GITHUB_REPO
+ARG EASYTIER_BRANCH
+ARG EASYTIER_WORKFLOW_FILE
+ARG EASYTIER_RUN_ID
+ARG EASYTIER_ARTIFACT_NAME
 ARG EASYTIER_VERSION
+ARG EASYTIER_DOWNLOAD_URL
+ARG EASYTIER_GITHUB_API
 ARG TARGETARCH
 
-RUN apk add --no-cache curl ca-certificates unzip \
-    && case "${TARGETARCH}" in \
-         amd64) ARCH=x86_64 ;; \
-         arm64) ARCH=aarch64 ;; \
-         *) echo "Unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
-       esac \
-    && ASSET="easytier-linux-${ARCH}-v${EASYTIER_VERSION}.zip" \
-    && URL="https://github.com/EasyTier/EasyTier/releases/download/v${EASYTIER_VERSION}/${ASSET}" \
-    && echo "Downloading ${URL}" \
-    && curl -fsSL -o /tmp/easytier.zip "${URL}" \
-    && mkdir -p /opt/easytier \
-    && unzip -o /tmp/easytier.zip -d /tmp/easytier-extract \
-    && find /tmp/easytier-extract -type f \( -name 'easytier-core' -o -name 'easytier-cli' \) -exec cp {} /opt/easytier/ \; \
-    && chmod +x /opt/easytier/easytier-core /opt/easytier/easytier-cli \
-    && rm -rf /tmp/easytier.zip /tmp/easytier-extract
+# Optional token as build-arg (discouraged: visible in history). Prefer:
+#   --secret id=github_token,env=GITHUB_TOKEN
+ARG GITHUB_TOKEN=
+
+ENV EASYTIER_SOURCE=${EASYTIER_SOURCE} \
+    EASYTIER_GITHUB_REPO=${EASYTIER_GITHUB_REPO} \
+    EASYTIER_BRANCH=${EASYTIER_BRANCH} \
+    EASYTIER_WORKFLOW_FILE=${EASYTIER_WORKFLOW_FILE} \
+    EASYTIER_RUN_ID=${EASYTIER_RUN_ID} \
+    EASYTIER_ARTIFACT_NAME=${EASYTIER_ARTIFACT_NAME} \
+    EASYTIER_VERSION=${EASYTIER_VERSION} \
+    EASYTIER_DOWNLOAD_URL=${EASYTIER_DOWNLOAD_URL} \
+    EASYTIER_GITHUB_API=${EASYTIER_GITHUB_API} \
+    TARGETARCH=${TARGETARCH} \
+    GITHUB_TOKEN=${GITHUB_TOKEN} \
+    DEST_DIR=/opt/easytier
+
+COPY docker/fetch-easytier.sh /fetch-easytier.sh
+
+# github_token secret is optional; required=false so release/url builds work offline of GH auth.
+RUN --mount=type=secret,id=github_token,required=false \
+    apk add --no-cache curl ca-certificates unzip tar jq \
+    && sed -i 's/\r$//' /fetch-easytier.sh \
+    && chmod +x /fetch-easytier.sh \
+    && /fetch-easytier.sh
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
-ARG EASYTIER_VERSION
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tini ca-certificates \
