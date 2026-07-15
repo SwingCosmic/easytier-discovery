@@ -1,5 +1,5 @@
 using System.Text.Json;
-using EtDiscovery.Web.Models;
+using EtDiscovery.Runtime.Models;
 
 namespace EtDiscovery.Tests;
 

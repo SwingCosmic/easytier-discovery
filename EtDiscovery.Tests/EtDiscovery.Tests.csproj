@@ -18,7 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../EtDiscovery.Core/EtDiscovery.Core.csproj" />
-    <ProjectReference Include="../EtDiscovery.Web/EtDiscovery.Web.csproj" />
+    <ProjectReference Include="../EtDiscovery.Runtime/EtDiscovery.Runtime.csproj" />
   </ItemGroup>
 
   <ItemGroup>

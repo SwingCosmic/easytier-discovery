@@ -1,6 +1,6 @@
 using EtDiscovery.Core.Models;
-using EtDiscovery.Web;
-using EtDiscovery.Web.Services;
+using EtDiscovery.Runtime;
+using EtDiscovery.Runtime.Services;
 
 namespace EtDiscovery.Tests;
 
@@ -10,7 +10,7 @@ public class EasyTierConfigGeneratorTests
     [Test]
     public void GeneratesTomlWithRoleDerivedNodeTypeFlagsAndPeers()
     {
-        var options = new EtDiscoveryWebOptions
+        var options = new EtDiscoveryRuntimeOptions
         {
             Roles = [RoleName.Registry, RoleName.Worker],
             NetworkName = "demo-net",

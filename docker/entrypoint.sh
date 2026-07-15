@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Container entrypoint for EtDiscovery.Web.
+# Container entrypoint for EtDiscovery.Runtime.
 # Configuration precedence (ASP.NET + bootstrap):
 #   1) CLI args after --
 #   2) ETDISCOVERY_ROLES / ETDISCOVERY_roles (required unless --roles)
@@ -98,4 +98,4 @@ fi
 export EasyTier__CorePath="${EasyTier__CorePath:-/usr/local/bin/easytier-core}"
 export EasyTier__CliPath="${EasyTier__CliPath:-/usr/local/bin/easytier-cli}"
 
-exec dotnet /app/EtDiscovery.Web.dll "$@"
+exec dotnet /app/EtDiscovery.Runtime.dll "$@"

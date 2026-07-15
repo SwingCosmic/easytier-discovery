@@ -4,7 +4,7 @@
   <Project Path="EtDiscovery.Sdk/EtDiscovery.Sdk.csproj" />
   <Project Path="EtDiscovery.Sdk.Tests/EtDiscovery.Sdk.Tests.csproj" />
   <Project Path="EtDiscovery.Tests/EtDiscovery.Tests.csproj" />
-  <Project Path="EtDiscovery.Web/EtDiscovery.Web.csproj" />
+  <Project Path="EtDiscovery.Runtime/EtDiscovery.Runtime.csproj" />
   <Project Path="examples/EtDiscovery.Examples.ServiceA/EtDiscovery.Examples.ServiceA.csproj" />
   <Project Path="examples/EtDiscovery.Examples.ServiceB/EtDiscovery.Examples.ServiceB.csproj" />
 </Solution>

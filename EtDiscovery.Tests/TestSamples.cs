@@ -29,26 +29,26 @@ internal static class TestSamples
         return new DiscoverySnapshot(nodes, instances);
     }
 
-    public static EtDiscovery.Web.EtDiscoveryWebOptions WebOptions(
-        IReadOnlyList<EtDiscovery.Web.RoleName>? roles = null,
-        IReadOnlyList<EtDiscovery.Web.PublishedServiceOptions>? services = null,
+    public static EtDiscovery.Runtime.EtDiscoveryRuntimeOptions WebOptions(
+        IReadOnlyList<EtDiscovery.Runtime.RoleName>? roles = null,
+        IReadOnlyList<EtDiscovery.Runtime.PublishedServiceOptions>? services = null,
         string? ipv4 = "10.144.144.1",
         IReadOnlyList<string>? registryCandidates = null,
         IReadOnlyList<string>? peers = null,
         bool autoDiscoverFromRouteMetadata = true)
     {
-        return new EtDiscovery.Web.EtDiscoveryWebOptions
+        return new EtDiscovery.Runtime.EtDiscoveryRuntimeOptions
         {
-            Roles = roles ?? [EtDiscovery.Web.RoleName.Registry],
+            Roles = roles ?? [EtDiscovery.Runtime.RoleName.Registry],
             NetworkName = "demo-net",
             NetworkSecret = "demo-secret",
-            VirtualNetworkCidr = EtDiscovery.Web.Ipv4Cidr.Parse("10.144.144.0/24"),
+            VirtualNetworkCidr = EtDiscovery.Runtime.Ipv4Cidr.Parse("10.144.144.0/24"),
             ListenUrl = "http://0.0.0.0:8080",
             RegistryCandidates = registryCandidates ?? ["10.144.144.1"],
             DiscoveryPort = 8080,
             AutoDiscoverFromRouteMetadata = autoDiscoverFromRouteMetadata,
             Services = services ?? [],
-            EasyTier = new EtDiscovery.Web.EasyTierRuntimeOptions
+            EasyTier = new EtDiscovery.Runtime.EasyTierRuntimeOptions
             {
                 CorePath = "/usr/local/bin/easytier-core",
                 CliPath = "/usr/local/bin/easytier-cli",

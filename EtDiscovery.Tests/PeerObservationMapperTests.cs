@@ -1,7 +1,7 @@
 using EtDiscovery.Core.Models;
-using EtDiscovery.Web;
-using EtDiscovery.Web.Models;
-using EtDiscovery.Web.Services;
+using EtDiscovery.Runtime;
+using EtDiscovery.Runtime.Models;
+using EtDiscovery.Runtime.Services;
 
 namespace EtDiscovery.Tests;
 
@@ -210,5 +210,5 @@ public class PeerObservationMapperTests
         Assert.That(peer.IsRegistryCandidate, Is.False);
     }
 
-    private static EtDiscoveryWebOptions CreateOptions() => TestSamples.WebOptions();
+    private static EtDiscoveryRuntimeOptions CreateOptions() => TestSamples.WebOptions();
 }

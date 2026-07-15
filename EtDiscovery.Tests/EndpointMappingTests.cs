@@ -1,7 +1,7 @@
 using EtDiscovery.Core.Models;
 using EtDiscovery.Core.Services;
-using EtDiscovery.Web;
-using EtDiscovery.Web.Services;
+using EtDiscovery.Runtime;
+using EtDiscovery.Runtime.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,7 +26,7 @@ public class EndpointMappingTests
                 },
             ]);
 
-        builder.Services.AddControllers().AddApplicationPart(typeof(EtDiscoveryWebOptions).Assembly);
+        builder.Services.AddControllers().AddApplicationPart(typeof(EtDiscoveryRuntimeOptions).Assembly);
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton(new DiscoveryNodeContext("local-node", [NodeRole.Registry]));
         builder.Services.AddSingleton(new DiscoveryEngine(new ReachableNodeProcessingPolicy(), new RoundRobinServiceSelectionPolicy()));

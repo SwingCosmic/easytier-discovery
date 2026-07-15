@@ -1,5 +1,5 @@
 using EtDiscovery.Core.Models;
-using EtDiscovery.Web.Services;
+using EtDiscovery.Runtime.Services;
 
 namespace EtDiscovery.Tests;
 

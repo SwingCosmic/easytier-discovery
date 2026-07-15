@@ -65,12 +65,12 @@ FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
 WORKDIR /src
 
 COPY EtDiscovery.Core/EtDiscovery.Core.csproj EtDiscovery.Core/
-COPY EtDiscovery.Web/EtDiscovery.Web.csproj EtDiscovery.Web/
-RUN dotnet restore EtDiscovery.Web/EtDiscovery.Web.csproj
+COPY EtDiscovery.Runtime/EtDiscovery.Runtime.csproj EtDiscovery.Runtime/
+RUN dotnet restore EtDiscovery.Runtime/EtDiscovery.Runtime.csproj
 
 COPY EtDiscovery.Core/ EtDiscovery.Core/
-COPY EtDiscovery.Web/ EtDiscovery.Web/
-RUN dotnet publish EtDiscovery.Web/EtDiscovery.Web.csproj \
+COPY EtDiscovery.Runtime/ EtDiscovery.Runtime/
+RUN dotnet publish EtDiscovery.Runtime/EtDiscovery.Runtime.csproj \
     -c Release \
     -o /app/publish \
     --no-restore \
