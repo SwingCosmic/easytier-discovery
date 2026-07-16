@@ -27,7 +27,7 @@ Rough positioning:
 | Registry / discovery | **Nacos / Consul** | Instance register, resolve, select; instances bound to virtual IPs |
 | Cross-network fabric | **EasyTier**, VPN / P2P / relay | Reuse overlay + observation; do not reimplement hole punching |
 | Weak-network liveness | **Orleans**-style suspect / multi-observer | Lease + network signals + votes + call feedback; designed / partial |
-| Runtime & integration | **Dapr** | Thin SDK + local runtime; sidecar / daemon / embedded share one API |
+| Runtime & integration | **Dapr** | Thin SDK → control plane; sidecar / daemon / embedded (only embedded hosts EasyTier in-process) |
 
 This repo is still an **early prototype**. Design docs are primarily in Chinese under [`docs/`](./docs/README.md); authoritative progress is [`docs/service-registry-plan.md`](./docs/service-registry-plan.md).
 
@@ -133,7 +133,7 @@ flowchart TB
 | **EasyTier / classic VPN** | Cross-network reachability | Network only—no service catalog | **Reuse** as network plane; service plane intersects, not nested |
 | **Service mesh** | Transparent traffic policy | Heavy; cluster-centric; costly for desktop/mobile | **No** transparent proxy; stay app-semantic |
 | **Orleans** | Membership suspect, actors | Not a general registry + cross-net VPN | **Borrow** suspect / multi-observer; actors later |
-| **Dapr** | Stable runtime API, many hosts | No EasyTier-class fabric | **Borrow** thin SDK + local runtime + sidecar/daemon |
+| **Dapr** | Stable runtime API, many hosts | No EasyTier-class fabric | **Borrow** thin SDK + multi mode; register/heartbeat from the app process |
 
 So EtDiscovery is **not** “another Nacos”, and **not** “VPN with a UI registry”. It is closer to:
 
@@ -180,7 +180,7 @@ These notes only explain licensing intent and rationale. **The authoritative leg
 | **[AGENTS.md](./AGENTS.md)** | Code map, change entry points, hard rules; Chinese |
 | **[docs/README.md](./docs/README.md)** | Positioning, scenarios, design map; Chinese |
 | [Core design](./docs/service-registry-core-design.md) | Roles, entities, health, selection |
-| [Application layer / API](./docs/service-registry-application-layer.md) | HTTP/SDK, run modes |
+| [Application integration (SDK / Runtime / API)](./docs/service-registry-application-layer.md) | Constraints, Mode, ActiveRenewal, HTTP, deploy |
 | [Bootstrap](./docs/service-registry-bootstrap-discovery.md) | Finding the registry |
 | [Plan](./docs/service-registry-plan.md) | Progress and next steps; single status source |
 | [Runbook](./docs/service-registry-prototype-validation.md) | Start and troubleshoot |
@@ -198,7 +198,7 @@ Module layout: [AGENTS.md §2](./AGENTS.md#2-项目结构).
 ### 1. Build
 
 ```powershell
-dotnet build EtDiscovery.Web/EtDiscovery.Web.csproj
+dotnet build EtDiscovery.Runtime/EtDiscovery.Runtime.csproj
 ```
 
 ### 2. Configuration notes
@@ -262,8 +262,8 @@ Example worker:
 ### 3. Run
 
 ```powershell
-dotnet run --project EtDiscovery.Web -- --roles registry
-dotnet run --project EtDiscovery.Web -- --roles worker
+dotnet run --project EtDiscovery.Runtime -- --roles registry
+dotnet run --project EtDiscovery.Runtime -- --roles worker
 ```
 
 ### 4. Containers
@@ -273,11 +273,11 @@ Prefer real Linux and Kubernetes.
 ```bash
 # From this repository root
 docker build -t etdiscovery:local .
-# ETDISCOVERY_ROLES required; ETDISCOVERY_MODE defaults to embedded
+# ETDISCOVERY_ROLES required; Mode defaults to daemon; registry image sets embedded
 # Config: ETDISCOVERY_CONFIG_FILE or mount /config/appsettings.json
 ```
 
-Sample: `docker/k8s/registry-sample.yaml`. Start/troubleshoot: [runbook](./docs/service-registry-prototype-validation.md). App ↔ runtime: [interaction design](./docs/service-registry-app-runtime-interaction.md).
+Sample: `docker/k8s/registry-sample.yaml`. Start/troubleshoot: [runbook](./docs/service-registry-prototype-validation.md). Integration contract: [application layer](./docs/service-registry-application-layer.md).
 
 ---
 

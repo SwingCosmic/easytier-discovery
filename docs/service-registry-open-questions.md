@@ -1,7 +1,7 @@
 # 待讨论分歧点
 
 只记录 **尚未冻结** 的设计项。已确认内容见 [plan §1](./service-registry-plan.md#1-已确认内容)。  
-应用 ↔ runtime、mode、SDK、配置拆分等 **已冻结** 结论见 [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md)（不再在此复述）。
+Mode、独立 Runtime、Sdk=worker/client、ActiveRenewal（注册+续约合一）等 **已冻结** 见 [应用接入](./service-registry-application-layer.md)（不再在此复述）。
 
 ## 1. 语言与实现形态
 
@@ -11,17 +11,18 @@
 
 倾向（未冻结）：核心算法库 + 独立控制面进程；多语言首版 Node.js / Java / .NET。
 
-## 2. 传输与进程边界（实现细节）
+## 2. 传输与观测细节
 
-契约已定；下列实现选型未冻结：
+契约已定主路径；下列实现选型未冻结：
 
-- 控制协议：长期 gRPC 为主 vs 继续以 HTTP/JSON 为主（当前原型与 Sdk 为 HTTP/JSON）
-- `daemon` 连接已有 EasyTier 的配置面（rpc-portal、观测路径、权限）
-- sidecar 与业务进程的本地鉴权（UDS、token 等）
+- 控制协议：长期 gRPC 为主 vs 继续以 HTTP/JSON 为主（当前原型为 HTTP/JSON）
+- SDK **内嵌** EasyTier 观测（cli/rpc-portal）vs **可选**节点辅助 daemon 提供 VIP/nodeId
+- `daemon` / `sidecar` 连接已有 EasyTier 的默认 `RpcPortal` / `InstanceName` 约定与权限
+- 控制面与 SDK 之间的鉴权（token、mTLS、同网假设）
 
 ## 3. Registry 职责上限
 
-- 是否允许兜底代理转发，还是只做目录与评分
+- 是否允许兜底代理转发业务流量，还是只做目录与评分
 - 配置持久化：内建存储还是先抽象接口
 - 区域协调、冲突合并建议、策略分发、审计的边界
 

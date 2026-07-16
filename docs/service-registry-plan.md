@@ -14,7 +14,7 @@
 - 服务目录、配置和 ACL 采用“拓扑所有权 + owner 确认链 + 多 registry 最终一致同步”。
 - 调用治理只做实例选择与推荐调用方式，不封装业务 RPC。
 - 弱网可用性采用“租约 + 应用健康 + 网络信号 + 观察者投票 + 调用反馈”的组合判断。
-- 接入形态采用 **薄 SDK + 本地 runtime + 多承载模式**（sidecar / daemon / embedded），契约见 [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md) 与 [应用层](./service-registry-application-layer.md)。
+- 接入形态：**独立 `EtDiscovery.Runtime` 进程**承载 **registry**；**持有 Sdk ⇔ worker/client**；ActiveRenewal = 注册+续约同一 upsert。节点辅助可选；**仅 `embedded` 进程内托管 EasyTier**。
 - 首版主要面向 Node.js、Java、.NET 接入；移动端首版只预留边界。
 
 未决分歧见 [待讨论问题](./service-registry-open-questions.md)。
@@ -23,26 +23,26 @@
 
 ## 2. 当前实现进度
 
-截至 2026-07-12：Web 原型完成 **registry 发现 + worker 控制面注册**；**Contracts Shared Project + Sdk + examples 接入骨架**已落地。本地 `/runtime/v1` 与 mode 驱动的 EasyTier 托管策略仍按 [交互契约](./service-registry-app-runtime-interaction.md) 待实现。
+截至 2026-07-16：**契约已纠偏**；**`EtDiscovery.Runtime` 重命名已完成**。Runtime 原型仍是 **registry 发现 + `Services[]` worker 代注册**；Sdk/examples 仍指向 **已废止的 `/runtime/v1` 骨架**。Mode 解析与 `ManagesEasyTierProcess` 未实现（ProcessManager 仍总是托管）。
 
 ### 2.1 已完成
 
-- 托管 `easytier-core`（生成 TOML + `-c`；运行时 `--rpc-portal`）；`easytier-cli` 读 peer/route
+- 托管 `easytier-core`（生成 TOML + `-c`；运行时 `--rpc-portal`）；`easytier-cli` 读 peer/route（**尚未**按 mode 关闭托管）
 - 配置：`EtDiscovery` / `EasyTier` 分离；`Peers` 属 EasyTier
 - 角色元数据：仅由 `--roles` 推导，禁止配置覆盖
 - registry 定位：`RegistryCandidates` → route metadata registry 位 → `GET /discovery/registry`（不再用“首个 peer”）
 - registry 内存目录：upsert / deregister / 查询；`/discovery/services`、`/discovery/select`
-- worker 经 HTTP 向 registry 注册；同机 `registry+worker` 可进程内注册；`Services[]` 配置代注册
+- 原型 worker：`Services[]` + `WorkerRegistrationOrchestrator` 代注册（**与终态 C2b 冲突，待收敛**）
 - Controllers 组织 HTTP；Dockerfile / entrypoint / k8s registry 样例
 - 容器入口：`ETDISCOVERY_ROLES`（必填）、`ETDISCOVERY_MODE`（镜像默认 `embedded`；兼容旧 `standalone`→embedded）
-- **`EtDiscovery.Contracts`**（Shared Project）+ **`EtDiscovery.Core`**（引擎/宿主）+ **`EtDiscovery.Sdk`**（`AddEtDiscovery` / `UseEtDiscovery` / 心跳 HostedService）
-- **`examples/ServiceA|B`**：SDK DI 接入与瘦配置；无跨服务业务调用代码
-- **Sdk 单测**（mock HTTP 路径）；Core/Web 既有测试保持通过
-- 交互契约文档（结论）：[应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md)
+- **`EtDiscovery.Contracts`** + **`EtDiscovery.Core`** + **`EtDiscovery.Sdk`**（DI/心跳骨架；**HTTP 目标仍为过时 `/runtime/v1`**）
+- **`examples/ServiceA|B`**：SDK DI 骨架；非终态联调
+- **Sdk 单测**（mock 旧路径）；Core/Runtime 既有测试保持通过
+- **应用接入文档**（原 application-layer + app-runtime-interaction **已合并**；SDK 调用模式、Mode、ActiveRenewal）
 
 ### 2.2 接口进度（清单）
 
-语义见 [应用层](./service-registry-application-layer.md#4-应用层-api) 与 [交互契约](./service-registry-app-runtime-interaction.md#4-api-面)。本处只记实现状态。
+语义见 [应用接入 §4 API](./service-registry-application-layer.md#4-api-面)。本处只记实现状态。
 
 | HTTP | 状态 |
 | --- | --- |
@@ -55,8 +55,8 @@
 | `GET /discovery/instances/{instanceId}` | 已实现 |
 | `GET /discovery/services` | 已实现 |
 | `GET /discovery/select` | 已实现（仅 registry） |
-| `PUT /discovery/instances/{instanceId}/lease` | 占位 |
-| `PUT /discovery/instances/{instanceId}/health` | 占位 |
+| `PUT /discovery/instances/{instanceId}/lease` | 占位；**非主路径**（ActiveRenewal 用 POST upsert） |
+| `PUT /discovery/instances/{instanceId}/health` | 占位；存活由 upsert 覆盖 |
 | `PUT /discovery/instances/{instanceId}/status` | 占位 |
 | `DELETE /discovery/instances/{instanceId}/status` | 占位 |
 | `PUT /discovery/instances/{instanceId}/metadata` | 占位 |
@@ -64,19 +64,23 @@
 | `GET /discovery/nodes/{nodeId}/instances` | 占位 |
 | `PUT /discovery/nodes/{nodeId}/status` | 占位 |
 | `DELETE /discovery/nodes/{nodeId}/status` | 占位 |
-| `GET/POST/PUT/DELETE /runtime/v1/*` | **未做**（Sdk 已按契约编码） |
+| `GET/POST/PUT/DELETE /runtime/v1/*` | **错误草案，不作为目标**；勿实现为主路径 |
 | `GET /bootstrap/status` | 未做 |
 | watch / reportCallResult 等 | 未做 |
+| SDK 直连控制面 ActiveRenewal（POST upsert）+ select | **未做**（终态主路径） |
+| `EtDiscovery.Web` → `EtDiscovery.Runtime` 重命名 | **已完成** |
 
 ### 2.2b 代码组件进度
 
 | 组件 | 状态 |
 | --- | --- |
 | `EtDiscovery.Contracts` Shared Project | 已落地 |
-| `EtDiscovery.Sdk` + Sdk.Tests | 已落地（对 `/runtime/v1` 的客户端） |
-| `examples/ServiceA\|B` | 已落地（DI only） |
-| Web 解析 `Mode` / 按 mode 托管 EasyTier | 未做（入口 env 已预置；ProcessManager 仍总是托管） |
-| ActiveHeartbeat TTL 管线 | 未做（仍有 worker 周期 upsert 路径） |
+| `EtDiscovery.Sdk` + Sdk.Tests | 骨架已落地；**目标改为控制面客户端（待改）** |
+| `examples/ServiceA\|B` | DI 骨架；待对齐终态 |
+| 应用接入文档（合并后） | **已纠偏冻结**（2026-07-16） |
+| Runtime 解析 `Mode` / `ManagesEasyTierProcess` 仅 embedded | 未做（ProcessManager 仍总是托管） |
+| 弱化 `Services[]` 代注册 Healthy | 未做 |
+| ActiveHeartbeat TTL 管线（业务 SDK → 控制面） | 未做 |
 
 ### 2.3 Bootstrap 相关进度
 
@@ -136,8 +140,8 @@
 
 ### 阶段 2：控制面最小闭环 — 部分完成
 
-- 已完成：实例注册/下线/查询/发现/选择（控制面 `/discovery/*`）。
-- 未完成：本地 `/runtime/v1/*`；lease / health / status / metadata 行为；watch；调用反馈；mode 驱动 EasyTier 托管。
+- 已完成：实例注册/下线/查询/发现/选择（控制面 `/discovery/*`）；契约侧明确 **SDK → 控制面**。
+- 未完成：Sdk 直连控制面；lease / health / status / metadata 行为；watch；调用反馈；Mode 二元托管；去掉代注册 Healthy。
 
 ### 阶段 2.5：Registry Bootstrap Discovery — 主路径已联调
 
@@ -160,8 +164,8 @@
 
 ### 阶段 4：多语言接入 — 部分开始
 
-- .NET：`EtDiscovery.Sdk` + Contracts + examples 接入骨架已落地；依赖 Web `/runtime/v1`。
-- 统一 runtime 协议（gRPC 主、HTTP 辅）与其它语言 SDK 未开始；见 [应用层](./service-registry-application-layer.md)、[交互契约](./service-registry-app-runtime-interaction.md)。
+- .NET：`EtDiscovery.Sdk` + Contracts + examples 骨架已落地；**须迁移为控制面客户端**（废除 `/runtime/v1` 目标）。
+- 统一控制面协议（gRPC 主、HTTP 辅）与其它语言 SDK 未开始；见 [应用接入](./service-registry-application-layer.md)。
 
 ### 阶段 5：框架适配与扩展 — 未开始
 
@@ -193,11 +197,13 @@
 
 ## 6. 下一轮工作顺序
 
-1. 实现 Web **`/runtime/v1/*`**（register / heartbeat / select / resolve）与角色门禁；对接 ActiveHeartbeat TTL。  
-2. 实现 **`Mode` 解析** 与 EasyTier 托管策略（daemon 不托管 / sidecar·embedded 捆绑）。  
-3. examples 补跨服务调用（在 runtime API 可用后）；Linux/K8s VIP 验证。  
-4. 移除 `RegistryPeer`；补齐 lease/health/status/metadata 行为。  
-5. `LastKnownRegistries`、`/bootstrap/status`；多语言薄 SDK；评分与反馈。
+1. **（文档已完成）** 边界与接入契约；**应用层 + 交互契约已合并**为 [application-layer](./service-registry-application-layer.md)。  
+2. **（已完成）** `EtDiscovery.Web` → `EtDiscovery.Runtime` 全量重命名。  
+3. 实现 **`Mode` 解析** 与 **`ManagesEasyTierProcess = embedded only`**；daemon/sidecar 仅连接观测；条件必填。  
+4. **Sdk 改为控制面客户端**：周期 **`POST /discovery/instances` upsert（ActiveRenewal）** + select；合并/废弃双轨 Register+Heartbeat；TTL。  
+5. **弱化/移除** 无 Sdk 的 `Services[]` 代注册 Healthy；准单体须进程内 Sdk 自注册。  
+6. examples：业务仅 Sdk + 独立 Runtime registry；Linux/K8s VIP 验证。  
+7. 移除 `RegistryPeer`；status/metadata；`LastKnownRegistries`；多语言 SDK；评分与反馈。
 
 ---
 

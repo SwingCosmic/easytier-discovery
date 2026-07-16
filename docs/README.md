@@ -22,7 +22,7 @@
 | --- | --- | --- |
 | EasyTier | 虚拟 IP、路由、打洞、relay、链路观测 | 服务目录语义 |
 | EtDiscovery control plane | 注册表、registry 发现、选择、健康/租约模型 | 业务 RPC 代理 |
-| 薄 SDK / 业务框架 | 查地址、发业务请求、上报反馈 | 复制 bootstrap / 评分状态机 |
+| 薄 SDK / 业务框架 | 查地址、发业务请求、**上报注册/心跳**、反馈 | 管理 EasyTier；复制完整评分状态机 |
 
 ### 1.3 与“同类组合”的对应关系
 
@@ -32,7 +32,7 @@
 | 跨网互联 | EasyTier | 进程托管 + peer/route 观测；见 [Bootstrap](./service-registry-bootstrap-discovery.md)、[参考：EasyTier 能力](./service-registry-references/easytier-capabilities.md) |
 | 弱网观察 / 分布式存活 | Orleans 风格 suspect、多观察者 | 状态机与评分设计；见 [核心设计](./service-registry-core-design.md) |
 | Actor 类扩展 | Orleans placement（长期） | 仅预留方向，非首版闭环；见 [open questions](./service-registry-open-questions.md) |
-| 运行模式 | Dapr | sidecar / daemon / embedded / 无 SDK HTTP；见 [应用层 §2](./service-registry-application-layer.md#2-运行模式与-sdk-边界) |
+| 运行模式 | Dapr | sidecar / daemon / embedded；**仅 embedded 进程内托管 EasyTier**；见 [应用接入](./service-registry-application-layer.md) |
 
 ### 1.4 能力清单
 
@@ -45,7 +45,7 @@
 | 节点角色元数据 | `registry` / `worker` / `client` 等经 EasyTier `node_type_*` 传播，避免“第一个 peer 就是注册中心” |
 | 弱网友好读取语义 | 瞬时快照、最终一致；不为强一致牺牲可用性（见 plan） |
 | 调用反馈与评分 | 延迟、错误类型、链路质量进入选择；规划中 |
-| 多语言接入 | 薄 SDK 调本地 runtime，不把核心逻辑复制到各语言；规划中 |
+| 多语言接入 | 薄 SDK 调控制面，不把完整评分/bootstrap 状态机复制到各语言；规划中 |
 
 **明确非目标：**
 
@@ -121,7 +121,7 @@ flowchart LR
 - 结合节点/实例健康与网络观测判断掉线（完整体验依赖后续健康与评分）
 
 **EtDiscovery 贡献：** 在“能连回家”之上增加 **服务级目录与在线视图**。  
-**说明：** 首版移动端 SDK 仅预留模型，见 [应用层·移动端](./service-registry-application-layer.md#8-移动端边界)。
+**说明：** 首版移动端 SDK 仅预留模型，见 [应用接入·移动端](./service-registry-application-layer.md#105-移动端边界)。
 
 ### 2.5 防火墙白名单环境下的安全接口调试
 
@@ -155,8 +155,7 @@ flowchart LR
 | --- | --- | --- |
 | 1 | **本文** | 定位、场景、目录 |
 | 2 | [核心设计](./service-registry-core-design.md) | 目标边界；Mode / NodeRole / CapabilityFlags；实体；健康状态机；评分与选择算法 |
-| 3 | [应用层与集成](./service-registry-application-layer.md) | **API 权威表**；SDK 边界；sidecar/daemon/embedded；框架集成；SelectedInstance；移动端预留 |
-| 3b | [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md) | **契约结论**：mode/角色、EasyTier 托管、配置拆分、`/runtime/v1`、SDK API |
+| 3 | [应用接入（SDK / Runtime / API）](./service-registry-application-layer.md) | **唯一**接入契约：硬约束、Mode、ActiveRenewal、HTTP 全表、配置、部署、框架集成 |
 | 4 | [Registry Bootstrap Discovery](./service-registry-bootstrap-discovery.md) | 为何 peer ≠ registry；候选优先级；配置模型；`GET /discovery/registry`；启动流程 |
 
 ### 3.2 进度、验证与分歧
@@ -199,19 +198,19 @@ flowchart LR
 
 详情只维护在 [plan](./service-registry-plan.md)；实现缺口速览见 [AGENTS.md §6](../AGENTS.md#6-当前实现缺口)。
 
-- Web 原型：EasyTier 托管、registry 发现、worker 控制面注册、基础 select/services  
-- **Sdk + Contracts + examples 接入骨架**已落地；**`/runtime/v1` 服务端与 mode 托管策略未实现**  
-- 契约见 [应用 ↔ Runtime 交互](./service-registry-app-runtime-interaction.md)  
-- 未完成：lease/health 完整行为、watch、反馈、弱网评分、多语言 SDK  
+- 可执行宿主：**`EtDiscovery.Runtime`**（独立进程）  
+- **契约已纠偏并合并为一篇** [应用接入](./service-registry-application-layer.md)  
+- Sdk/examples 仍为过时 `/runtime/v1` 骨架；Mode 未实现  
+- 未完成：Mode、Sdk 改控制面、去掉无 Sdk 代注册 Healthy、watch、反馈、评分  
 
 ---
 
 ## 5. 建议阅读路径
 
-**产品 / 架构通读：** 根 README → 本文 §1–2 → 核心设计 §1–4 → 应用层 §1–4  
+**产品 / 架构通读：** 根 README → 本文 §1–2 → 核心设计 §1–4 → [应用接入](./service-registry-application-layer.md) §1–5  
 
 **动手改代码：** [AGENTS.md](../AGENTS.md) → plan → 对应设计专题  
 
 **实现联调：** plan → Runbook → Bootstrap 配置模型  
 
-**做 API / SDK：** 应用层 + [交互契约](./service-registry-app-runtime-interaction.md) → plan 接口清单  
+**做 API / SDK：** [应用接入](./service-registry-application-layer.md) → plan 接口清单  

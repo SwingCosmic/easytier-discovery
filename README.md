@@ -26,7 +26,7 @@ EasyTier Discovery（代码内简称 `EtDiscovery`）是构建在 [EasyTier](htt
 | 服务注册 / 发现 | **Nacos / Consul** | 实例注册、解析、选择；实例绑定虚拟 IP |
 | 跨网互联底座 | **EasyTier**，VPN / P2P / relay | 不重做打洞与路由，复用 overlay 与观测 |
 | 弱网存活与分布式观察 | **Orleans** 风格 suspect / 多观察者 | 租约 + 网络信号 + 投票 + 调用反馈；设计中 |
-| 运行与接入形态 | **Dapr** | 薄 SDK + 本地 runtime；sidecar / daemon / embedded 同一套 API |
+| 运行与接入形态 | **Dapr** | 薄 SDK → 控制面；sidecar / daemon / embedded 部署形态（仅 embedded 进程内托管 EasyTier） |
 
 当前仓库仍是 **早期原型**：设计与最小联调并行，接口与配置可能无兼容性承诺地变更。更细的能力与场景见 [`docs/README.md`](./docs/README.md)，进度见 [`docs/service-registry-plan.md`](./docs/service-registry-plan.md)。
 
@@ -132,7 +132,7 @@ flowchart TB
 | **EasyTier / 传统 VPN** | 跨网互通 | 只有网络层，没有服务级目录与选择 | **复用**网络面；服务面与之正交相交，非内嵌 |
 | **Service Mesh** | 透明流量治理 | 重、偏集群内；弱网/桌面/移动成本高 | **不**做透明代理；更贴近应用语义 |
 | **Orleans** | 成员怀疑、Actor 分布 | 不是通用服务注册中心 + 跨网 VPN | **借鉴** suspect / 多观察者与后续 Actor 扩展 |
-| **Dapr** | 稳定 runtime API + 多种部署形态 | 不提供 EasyTier 级跨网底座 | **借鉴**“薄 SDK + 本地 runtime + sidecar/daemon” |
+| **Dapr** | 稳定 runtime API + 多种部署形态 | 不提供 EasyTier 级跨网底座 | **借鉴**“薄 SDK + 多承载 mode”；注册/心跳在业务进程 |
 
 因此 EtDiscovery **不是**“又一个 Nacos”，也 **不是**“带注册中心的 VPN 面板”，而是：
 
@@ -179,7 +179,7 @@ flowchart TB
 | **[AGENTS.md](./AGENTS.md)** | 代码结构、改逻辑入口、硬约定 |
 | **[docs/README.md](./docs/README.md)** | 能力定位、场景、设计文档目录 |
 | [核心设计](./docs/service-registry-core-design.md) | 角色/实体/健康/选择 |
-| [应用层与 API](./docs/service-registry-application-layer.md) | HTTP/SDK、运行模式 |
+| [应用接入（SDK / Runtime / API）](./docs/service-registry-application-layer.md) | 硬约束、Mode、ActiveRenewal、HTTP、部署 |
 | [Bootstrap](./docs/service-registry-bootstrap-discovery.md) | 如何找到 registry |
 | [阶段计划](./docs/service-registry-plan.md) | 进度与下一步，唯一状态源 |
 | [原型 Runbook](./docs/service-registry-prototype-validation.md) | 启动与排查 |
@@ -197,7 +197,7 @@ flowchart TB
 ### 1. 构建
 
 ```powershell
-dotnet build EtDiscovery.Web/EtDiscovery.Web.csproj
+dotnet build EtDiscovery.Runtime/EtDiscovery.Runtime.csproj
 ```
 
 ### 2. 配置要点
@@ -261,8 +261,8 @@ Worker 示例：
 ### 3. 运行
 
 ```powershell
-dotnet run --project EtDiscovery.Web -- --roles registry
-dotnet run --project EtDiscovery.Web -- --roles worker
+dotnet run --project EtDiscovery.Runtime -- --roles registry
+dotnet run --project EtDiscovery.Runtime -- --roles worker
 ```
 
 ### 4. 容器
@@ -272,11 +272,11 @@ dotnet run --project EtDiscovery.Web -- --roles worker
 ```bash
 # 在本仓库根目录
 docker build -t etdiscovery:local .
-# ETDISCOVERY_ROLES 必填；ETDISCOVERY_MODE 默认 embedded
+# ETDISCOVERY_ROLES 必填；Mode 默认 daemon，registry 镜像显式 embedded
 # 配置：ETDISCOVERY_CONFIG_FILE 或挂载 /config/appsettings.json
 ```
 
-样例：`docker/k8s/registry-sample.yaml`。启动与排查见 [Runbook](./docs/service-registry-prototype-validation.md)；业务 ↔ runtime 契约见 [交互文档](./docs/service-registry-app-runtime-interaction.md)。
+样例：`docker/k8s/registry-sample.yaml`。启动与排查见 [Runbook](./docs/service-registry-prototype-validation.md)；接入契约见 [应用接入](./docs/service-registry-application-layer.md)。
 
 ---
 

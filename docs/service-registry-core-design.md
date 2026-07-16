@@ -22,7 +22,8 @@
 这一轮开始，不再把 `A/B/C` 作为核心抽象，而改为三层模型：
 
 - `Mode`（部署/生命周期模式：`sidecar` / `daemon` / `embedded`）
-  - 描述进程如何承载；**daemon 不捆绑 EasyTier**，**sidecar/embedded 捆绑托管**
+  - 描述宿主如何部署、以及 **EtDiscovery 是否进程内拉起 EasyTier**
+  - **仅 `embedded` 进程内托管** core；`daemon` / `sidecar` 只连接/观测已有隧道
 - `NodeRole`
   - 描述节点主要承担什么职责
 - `CapabilityFlags`
@@ -32,28 +33,31 @@
 
 ### 2.1 Mode（原 RuntimeMode）
 
-`Mode` 只描述 **业务如何挂接 runtime / EasyTier 生命周期与部署关系**，不表达控制面职责和业务权限。  
-启动 **必传**：`--mode` / `ETDISCOVERY_MODE` / `EtDiscovery:Mode`。  
+`Mode` 只描述 **宿主部署形态与 EasyTier 进程归属**，不表达控制面职责和业务权限。  
+参数：`--mode` / `ETDISCOVERY_MODE` / `EtDiscovery:Mode`。  
 取值 **仅** `sidecar` | `daemon` | `embedded`。  
+**可省略，默认 `daemon`**（假定 EasyTier 已由外部拉起）。  
 **不存在 `standalone` /「独立模式」**——旧称一律映射为 **`embedded`**。  
-角色 × mode 矩阵与经典部署见 [应用 ↔ Runtime 交互 §16](./service-registry-app-runtime-interaction.md#16-mode-定义角色交叉矩阵与经典部署)；**代码不对组合做校验**。
+角色 × mode 矩阵与经典部署见 [应用接入 §3 / §8](./service-registry-application-layer.md#3-mode-与-easytier-生命周期)；**代码不对组合做校验**。
 
 - `sidecar`
   - 与业务进程或业务容器就近旁路（典型：K8s 同 Pod）
-  - **捆绑托管** EasyTier（否则无人启动）
+  - EasyTier 由 **编排层**（多容器 / supervisor）与业务 **同生命周期** 拉起
+  - EtDiscovery **默认不** `Process.Start` 托管 core（与 daemon 同属「只观测/连接」）
 - `daemon`
-  - **业务语义**：多个业务进程共享 **同一网络命名空间内** 一个 EtDiscovery 宿主
-  - **不捆绑、不托管** EasyTier 生命周期：隧道由运维 **外置共享**（多服务共用 VIP）
+  - **业务语义**：同 NS 内可共享节点侧辅助宿主；多业务进程各自带 SDK
+  - EasyTier 由运维 **外置** 独立 unit；EtDiscovery **不**进程内托管
   - **不是** Kubernetes `DaemonSet` 的同义词；大集群允许多套独立网络/daemon
 - `embedded`
-  - runtime 与宿主进程一体：业务内嵌，或 **本进程即 EtDiscovery**（含原 standalone，如 registry）
-  - **捆绑托管** EasyTier；**registry+embedded 必须捆绑**
-  - **roles 含 `registry` 时**：可选 `daemon`（外置隧道，少见）或 `embedded`（集群 **只用** 此）
+  - runtime 与宿主进程一体：或 **本进程即 EtDiscovery**（含原 standalone，如 registry）
+  - **唯一**默认由 EtDiscovery **进程内托管** EasyTier（生成 TOML + 子进程）
+  - 集群 registry **推荐** `embedded`；非集群 registry 可用 `daemon` + 外置隧道
 
 约束：
 
-- 同一 `NodeRole` 可运行在不同 `Mode` 下（矩阵见交互文档）。
-- `Mode` 不直接决定目录权限；**是否由 EtDiscovery 托管 EasyTier** 由 `Mode` 解释。
+- 同一 `NodeRole` 可运行在不同 `Mode` 下（矩阵见应用接入文档）。
+- `Mode` 不直接决定目录权限。
+- **代码侧二元：** `ManagesEasyTierProcess = (Mode == embedded)`。「部署捆绑」≠「子进程托管」。
 
 ### 2.2 NodeRole
 
@@ -61,10 +65,12 @@
 
 - `registry`
   - 负责目录聚合、注册查询、配置传播、状态汇总与控制面接口
+  - **仅允许**在独立进程 **`EtDiscovery.Runtime`** 中启动（首版不把 Runtime 嵌进任意业务进程）
 - `worker`
-  - 负责服务提供方本地发布、续约、健康与元数据上报
+  - 服务提供方 **发布 / ActiveRenewal（注册+续约合一）** / 元数据
+  - **必须持有 Sdk**；落在业务进程，或 Runtime 准单体（registry+worker 且进程内 Sdk 向自己注册）
 - `client`
-  - 负责服务消费方本地查询、选择、watch 与调用反馈
+  - 服务消费方查询、选择、watch、调用反馈；**必须持有 Sdk**
 - `observer`
   - 负责观测、探测、怀疑票和诊断信息上报
 - `gateway`
@@ -75,13 +81,13 @@
 
 补充说明：
 
-- `registry` 可以是纯控制面节点，也可以是连入 EasyTier 网络的普通 overlay 节点。
-- `client` 恢复为正式角色，用来表达“消费方职责”，而不是再隐含塞进 `worker` 或 `empty`。
+- **持有 Sdk ⇔ 可实现 worker/client**；无 Sdk 的 Runtime 不能权威发布业务实例。
+- **registry + worker 同进程** = 耦合业务的 **准单体**（Runtime 宿主 + 业务 + Sdk 自注册）；生产宜拆分。
+- `registry` 控制面可连 EasyTier overlay；进程形态仍是独立 Runtime。
+- `client` 是正式消费方角色，不隐含进 `worker` 或 `empty`。
 - `gateway` 是特殊入口角色，不再与 `client` 共用同一组能力名。
-- `empty` 不是基础设施角色，也不承载额外网络语义；它只表示“当前没有声明任何角色”。
-- `empty` 不允许与其他 `NodeRole` 叠加；一旦声明任意其他角色，该节点就不再是 `empty`。
-- 如果后续确实需要显式标注 relay、中转或其他网络基础设施职责，应新增独立角色，而不是复用 `empty`。
-- 一个节点允许同时承载多个非空 `NodeRole`，例如同机承担 `registry + worker`，或承担 `client + gateway`。
+- `empty` 只表示“当前没有声明任何角色”；不允许与其他 `NodeRole` 叠加。
+- 一个节点（进程）允许同时承载多个非空角色，例如 `registry + worker`（准单体）或 `client + gateway`。
 
 ### 2.3 CapabilityFlags
 
@@ -105,7 +111,7 @@
 | NodeRole | 角色职责 | 角色专属能力 |
 | --- | --- | --- |
 | `registry` | 目录与控制面 | `registry_accept_registration` `registry_query_catalog` `registry_manage_catalog` `registry_distribute_config` `registry_aggregate_state` `registry_advertise_bootstrap` |
-| `worker` | 服务提供方本地发布 | `worker_publish_instance` `worker_renew_instance` `worker_report_health` `worker_update_metadata` |
+| `worker` | 服务提供方发布（经 Sdk） | `worker_publish_instance` `worker_renew_instance`（与 publish 同一 ActiveRenewal） `worker_update_metadata` |
 | `client` | 服务消费方本地发现 | `client_resolve_service` `client_select_instance` `client_watch_service` `client_report_feedback` |
 | `observer` | 独立观测与诊断 | `observer_probe_node` `observer_emit_suspect_vote` `observer_publish_diagnostics` |
 | `gateway` | 公网入口与代理调用 | `gateway_accept_ingress` `gateway_resolve_backend` `gateway_proxy_business_call` `gateway_route_fallback` |
@@ -243,9 +249,14 @@ gateway_proxy_business_call"] --- E
 
 ## 6. 健康检查与状态机
 
+### 6.0 ActiveRenewal（与心跳合一）
+
+业务存活信号统一为 **ActiveRenewal**：持有 Sdk 的进程周期对控制面做 **`POST /discovery/instances` 幂等 upsert**（首次即注册，之后即续约）。  
+不要求并行的独立 heartbeat/lease HTTP 主路径。细节见 [应用接入 §5 ActiveRenewal](./service-registry-application-layer.md#5-注册身份与-activerenewal)。
+
 ### 6.1 三段式租约
 
-- `ttl_healthy`：正常续约窗口。
+- `ttl_healthy`：正常 ActiveRenewal 窗口。
 - `ttl_suspect`：续约超时但仍保留为可疑或降级状态。
 - `ttl_delete`：长期失联且多信号确认后进入删除或死亡。
 
